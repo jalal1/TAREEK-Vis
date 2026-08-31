@@ -190,13 +190,33 @@ int cmdPreprocess(const QString& scenarioDir, bool force) {
     if (!files.transit.isEmpty()) pre.setTransitScheduleFile(files.transit);
     pre.setOutputDirectory(cacheDir);
 
+    // Two different measurements, and conflating them was the original bug in
+    // this command: with a cache already present, calling processAll() anyway
+    // re-parses the XML and reports a "warm" time indistinguishable from cold.
+    //
+    // Cold  = parse the XML and write the cache (the convert-once cost).
+    // Warm  = read the cache back into the in-memory indices (what the user
+    //         pays on every open after the first), which is what the desktop
+    //         app does when it finds a valid cache.
     const bool wasCached = pre.hasCachedFiles();
 
     QElapsedTimer timer;
     timer.start();
-    // processAll() runs the whole conversion synchronously when called
-    // directly, rather than through a worker thread as the GUI does.
-    pre.processAll();
+    if (wasCached) {
+        // Load the cache exactly as the application would, and touch the
+        // indices so the timing covers the work, not a lazy open.
+        simvis::NetworkIndex network;
+        simvis::VehicleIndex vehicles;
+        if (!network.loadFile(pre.networkBinaryPath()) ||
+            !vehicles.loadFile(pre.vehicleIndexPath())) {
+            note("Cache present but could not be read; re-run with --force.");
+            return 2;
+        }
+    } else {
+        // processAll() runs the whole conversion synchronously when called
+        // directly, rather than through a worker thread as the GUI does.
+        pre.processAll();
+    }
     const qint64 elapsedMs = timer.elapsed();
 
     // Two different questions, so two different numbers. `input_bytes` is the
@@ -212,6 +232,7 @@ int cmdPreprocess(const QString& scenarioDir, bool force) {
         {"experiment", "preprocess"},
         {"scenario", QDir(scenarioDir).dirName()},
         {"cold", !wasCached},
+        {"measured", wasCached ? "cache_load" : "xml_conversion"},
         {"seconds", elapsedMs / 1000.0},
         {"input_bytes", inputBytes},
         {"input_bytes_gz", inputBytesGz},

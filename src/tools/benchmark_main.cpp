@@ -31,9 +31,12 @@
 #include <QJsonObject>
 #include <QRegularExpression>
 
+#include <zlib.h>
+
 #include <cstdio>
 #include <map>
 #include <memory>
+#include <vector>
 
 #include "analysis/nkde_scatter.h"
 #include "analysis/nkdv_network.h"
@@ -122,29 +125,54 @@ qint64 fileSize(const QString& path) {
     return path.isEmpty() ? 0 : QFileInfo(path).size();
 }
 
-// Uncompressed size of a gzip file, from the ISIZE field in its last 4 bytes.
+// Uncompressed size of a gzip file.
 //
 // The compression claim the paper makes is against the XML the simulator
 // produced, not against its gzipped form -- reporting the latter understates
 // the index by an order of magnitude, because it credits gzip's work to us.
-// ISIZE is modulo 2^32, so for a member over 4 GB it wraps; the caller is told
-// (returns 0) rather than given a wrong number.
+//
+// The cheap answer is the ISIZE field in the last four bytes, but it is stored
+// modulo 2^32, and a metropolitan event log passes 4 GB easily (Chicago's is
+// 20.7 GB, which ISIZE reports as 1.9 GB). So ISIZE is used only when it can be
+// trusted, and otherwise the member is decompressed and counted. That costs
+// seconds on a multi-gigabyte file and runs once per scenario, which is a fair
+// price for a headline number in a paper being correct.
 qint64 gzipUncompressedSize(const QString& path) {
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) return 0;
-    if (f.size() < 18) return 0;                 // smaller than a valid member
-    if (!f.seek(f.size() - 4)) return 0;
-    const QByteArray tail = f.read(4);
-    if (tail.size() != 4) return 0;
-    const quint32 isize =
-        (static_cast<quint8>(tail[0]))        |
-        (static_cast<quint8>(tail[1]) << 8)   |
-        (static_cast<quint8>(tail[2]) << 16)  |
-        (static_cast<quint32>(static_cast<quint8>(tail[3])) << 24);
-    // A file whose compressed size already exceeds ISIZE cannot be right: the
-    // field has wrapped past 4 GB. Report nothing rather than a wrapped value.
-    if (static_cast<qint64>(isize) < f.size()) return 0;
-    return static_cast<qint64>(isize);
+    const qint64 onDisk = f.size();
+    if (onDisk < 18) return 0;                   // smaller than a valid member
+
+    qint64 isize = 0;
+    if (f.seek(onDisk - 4)) {
+        const QByteArray tail = f.read(4);
+        if (tail.size() == 4) {
+            isize = static_cast<qint64>(
+                (static_cast<quint32>(static_cast<quint8>(tail[0])))       |
+                (static_cast<quint32>(static_cast<quint8>(tail[1])) << 8)  |
+                (static_cast<quint32>(static_cast<quint8>(tail[2])) << 16) |
+                (static_cast<quint32>(static_cast<quint8>(tail[3])) << 24));
+        }
+    }
+    f.close();
+
+    // XML compresses by roughly 8-10x, so a member whose ISIZE is under about
+    // 4x its compressed size has almost certainly wrapped. Below that bar,
+    // count the bytes instead of trusting the field. The threshold only has to
+    // separate "plausible" from "impossible"; the exact multiple is not
+    // load-bearing, because a false positive merely costs a decompression pass.
+    if (isize > onDisk * 4) return isize;
+
+    gzFile gz = gzopen(QFile::encodeName(path).constData(), "rb");
+    if (!gz) return 0;
+    constexpr int kChunk = 1 << 20;              // 1 MB
+    std::vector<char> buffer(kChunk);
+    qint64 total = 0;
+    int n = 0;
+    while ((n = gzread(gz, buffer.data(), kChunk)) > 0) total += n;
+    const bool ok = (n == 0);                    // 0 = clean EOF, -1 = error
+    gzclose(gz);
+    return ok ? total : 0;
 }
 
 // The size a file contributes to the "input" total: its uncompressed size when

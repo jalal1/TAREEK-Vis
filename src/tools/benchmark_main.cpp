@@ -25,6 +25,7 @@
 #include <QCommandLineParser>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -117,6 +118,42 @@ qint64 fileSize(const QString& path) {
     return path.isEmpty() ? 0 : QFileInfo(path).size();
 }
 
+// Uncompressed size of a gzip file, from the ISIZE field in its last 4 bytes.
+//
+// The compression claim the paper makes is against the XML the simulator
+// produced, not against its gzipped form -- reporting the latter understates
+// the index by an order of magnitude, because it credits gzip's work to us.
+// ISIZE is modulo 2^32, so for a member over 4 GB it wraps; the caller is told
+// (returns 0) rather than given a wrong number.
+qint64 gzipUncompressedSize(const QString& path) {
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return 0;
+    if (f.size() < 18) return 0;                 // smaller than a valid member
+    if (!f.seek(f.size() - 4)) return 0;
+    const QByteArray tail = f.read(4);
+    if (tail.size() != 4) return 0;
+    const quint32 isize =
+        (static_cast<quint8>(tail[0]))        |
+        (static_cast<quint8>(tail[1]) << 8)   |
+        (static_cast<quint8>(tail[2]) << 16)  |
+        (static_cast<quint32>(static_cast<quint8>(tail[3])) << 24);
+    // A file whose compressed size already exceeds ISIZE cannot be right: the
+    // field has wrapped past 4 GB. Report nothing rather than a wrapped value.
+    if (static_cast<qint64>(isize) < f.size()) return 0;
+    return static_cast<qint64>(isize);
+}
+
+// The size a file contributes to the "input" total: its uncompressed size when
+// it is gzipped and that size is knowable, otherwise its size on disk.
+qint64 logicalSize(const QString& path) {
+    if (path.isEmpty()) return 0;
+    if (path.endsWith(".gz", Qt::CaseInsensitive)) {
+        const qint64 raw = gzipUncompressedSize(path);
+        if (raw > 0) return raw;
+    }
+    return QFileInfo(path).size();
+}
+
 qint64 directorySize(const QString& path) {
     qint64 total = 0;
     for (const QFileInfo& fi : QDir(path).entryInfoList(QDir::Files))
@@ -158,7 +195,13 @@ int cmdPreprocess(const QString& scenarioDir, bool force) {
     pre.processAll();
     const qint64 elapsedMs = timer.elapsed();
 
-    const qint64 inputBytes = fileSize(files.network) + fileSize(files.events);
+    // Two different questions, so two different numbers. `input_bytes` is the
+    // XML the simulator wrote, which is what the compression claim is about;
+    // `input_bytes_gz` is what sits on disk, which is what the read cost is
+    // about. Reporting only the second would understate the index by ~10x.
+    const qint64 inputBytes =
+        logicalSize(files.network) + logicalSize(files.events);
+    const qint64 inputBytesGz = fileSize(files.network) + fileSize(files.events);
     const qint64 cacheBytes = directorySize(cacheDir);
 
     QJsonObject rec{
@@ -167,13 +210,16 @@ int cmdPreprocess(const QString& scenarioDir, bool force) {
         {"cold", !wasCached},
         {"seconds", elapsedMs / 1000.0},
         {"input_bytes", inputBytes},
+        {"input_bytes_gz", inputBytesGz},
         {"cache_bytes", cacheBytes},
         {"network_file", QFileInfo(files.network).fileName()},
         {"events_file", QFileInfo(files.events).fileName()},
         {"peak_rss_kb", residentKb()},
     };
-    if (cacheBytes > 0)
+    if (cacheBytes > 0) {
         rec["compression_ratio"] = double(inputBytes) / double(cacheBytes);
+        rec["compression_ratio_gz"] = double(inputBytesGz) / double(cacheBytes);
+    }
     emitRecord(rec);
     return 0;
 }

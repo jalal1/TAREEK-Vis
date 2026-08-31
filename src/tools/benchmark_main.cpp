@@ -61,16 +61,20 @@ void note(const QString& message) {
 // Resident set size in kilobytes, or 0 where it cannot be read. Linux only,
 // which is where the benchmarks run; on other platforms the field is simply
 // absent rather than wrong.
+//
+// Read with readAll() rather than a readLine() loop: files under /proc report
+// a size of 0, and QFile::atEnd() believes it, so a `while (!atEnd())` loop
+// exits immediately and silently reports 0 for every scenario. readAll() keeps
+// reading until the kernel returns nothing, which is what a procfs file needs.
 qint64 residentKb() {
 #ifdef Q_OS_LINUX
     QFile status("/proc/self/status");
     if (status.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        while (!status.atEnd()) {
-            const QByteArray line = status.readLine();
-            if (line.startsWith("VmRSS:")) {
-                return QString::fromLatin1(line)
-                    .remove(QRegularExpression("[^0-9]")).toLongLong();
-            }
+        const QList<QByteArray> lines = status.readAll().split('\n');
+        for (const QByteArray& line : lines) {
+            if (!line.startsWith("VmRSS:")) continue;
+            return QString::fromLatin1(line)
+                .remove(QRegularExpression("[^0-9]")).toLongLong();
         }
     }
 #endif

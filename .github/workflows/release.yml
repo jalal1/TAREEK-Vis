@@ -39,10 +39,21 @@ jobs:
       - name: Download FFmpeg (essentials build)
         shell: msys2 {0}
         run: |
-          curl -L -o ffmpeg.zip https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
+          set -e
+          curl -fL -o ffmpeg.zip https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
           unzip -q ffmpeg.zip -d ffmpeg-extract
           mkdir -p ffmpeg
-          cp ffmpeg-extract/*/bin/ffmpeg.exe ffmpeg/ffmpeg.exe
+          # The archive's inner directory carries the ffmpeg version, so the
+          # glob shifts on every upstream release. Resolve it explicitly and
+          # fail loudly if it no longer matches.
+          src=$(find ffmpeg-extract -mindepth 3 -maxdepth 3 -type f -name ffmpeg.exe -path '*/bin/*' | head -1)
+          if [ -z "$src" ]; then
+            echo "::error::ffmpeg.exe not found in archive - upstream layout changed"
+            find ffmpeg-extract -maxdepth 2
+            exit 1
+          fi
+          cp "$src" ffmpeg/ffmpeg.exe
+          ./ffmpeg/ffmpeg.exe -version | head -1
 
       - name: Assemble redistributable folder
         shell: msys2 {0}
@@ -74,6 +85,13 @@ jobs:
 
           mkdir -p "$DIST_DIR/ffmpeg"
           cp ffmpeg/ffmpeg.exe "$DIST_DIR/ffmpeg/"
+
+          # Video recording resolves ffmpeg next to the executable, so a build
+          # that ships without it looks fine until a user hits Record.
+          if [ ! -f "$DIST_DIR/ffmpeg/ffmpeg.exe" ]; then
+            echo "::error::ffmpeg missing from dist - video recording would be broken"
+            exit 1
+          fi
 
       - name: Derive version from tag
         id: version

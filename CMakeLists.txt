@@ -146,6 +146,9 @@ set(BENCH_SOURCES
     src/data/vehicle_index.cpp
     src/analysis/nkdv_network.cpp
     src/analysis/nkde_scatter.cpp
+    # The gather-form baseline is measured by tareek-bench only; the
+    # application ships the scatter form alone.
+    src/analysis/nkde_gather.cpp
     src/analysis/heatmap_cache.cpp
     third_party/pugixml.cpp
 )

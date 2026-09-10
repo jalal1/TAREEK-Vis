@@ -14,7 +14,7 @@
 //   tareek-bench preprocess --scenario DIR [--force]
 //   tareek-bench stats      --scenario DIR
 //   tareek-bench density    --scenario DIR [--type NAME] [--bandwidth M]
-//                                          [--lixel M] [--repeat N]
+//                                          [--lixel M] [--repeat N] [--gather]
 //
 // Every subcommand prints one JSON object per line to stdout ("JSON Lines"),
 // so results append cleanly across runs and parse without a schema. Progress
@@ -38,6 +38,7 @@
 #include <memory>
 #include <vector>
 
+#include "analysis/nkde_gather.h"
 #include "analysis/nkde_scatter.h"
 #include "analysis/nkdv_network.h"
 #include "core/logger.h"
@@ -362,7 +363,8 @@ int cmdStats(const QString& scenarioDir) {
 // type, the counts that describe the workload -- how many edges carry a point
 // out of how many exist -- alongside the runtime.
 int cmdDensity(const QString& scenarioDir, const QString& onlyType,
-               double bandwidth, int lixelLength, int repeats) {
+               double bandwidth, int lixelLength, int repeats,
+               bool alsoGather) {
     std::unique_ptr<simvis::NetworkIndex> network;
     std::unique_ptr<simvis::VehicleIndex> vehicles;
     if (!loadIndices(scenarioDir, network, vehicles)) return 2;
@@ -431,12 +433,20 @@ int cmdDensity(const QString& scenarioDir, const QString& onlyType,
                 {"bandwidth_m", bandwidth},
                 {"lixel_m", lixelLength},
                 {"activities", qint64(points.size())},
+                // Repeat visits by one person to one place count once; see
+                // NkdeScatter::uniquePlaces().
+                {"places", qint64(r.pointsInput - r.pointsMerged)},
+                {"activities_merged", qint64(r.pointsMerged)},
                 {"points_placed", qint64(r.pointsPlaced)},
                 {"points_skipped", qint64(r.pointsSkipped)},
                 {"source_edges", qint64(r.sourceEdges)},
                 {"considered_edges", qint64(r.consideredEdges)},
                 {"total_edges", qint64(net.edgeCount())},
-                {"lixels", qint64(r.lixels.size())},
+                // Two distinct quantities, named apart because conflating them
+                // understates the network by ~40 %: the sites the network
+                // divides into, and the subset the kernel actually reached.
+                {"lixels_total", qint64(r.lixelsTotal)},
+                {"lixels_nonzero", qint64(r.lixels.size())},
                 {"seconds", r.seconds},
                 {"resident_kb", residentKb()},
             };
@@ -447,6 +457,67 @@ int cmdDensity(const QString& scenarioDir, const QString& onlyType,
                 rec["empty_edge_pct"] =
                     100.0 * double(net.edgeCount() - r.sourceEdges) /
                     double(net.edgeCount());
+            }
+            emitRecord(rec);
+        }
+
+        if (!alsoGather) continue;
+
+        // The baseline the paper's efficiency claim is measured against: the
+        // same map computed in the standard lixel-driven direction. Run after
+        // the scatter repeats so a failure here cannot cost the main numbers.
+        simvis::NkdeGather::Params gatherParams;
+        gatherParams.bandwidth = bandwidth;
+        gatherParams.lixelLength = lixelLength;
+
+        for (int run = 0; run < repeats; ++run) {
+            note(QString("density (gather baseline): %1, run %2/%3")
+                 .arg(type).arg(run + 1).arg(repeats));
+
+            const simvis::NkdeGather::Result g =
+                simvis::NkdeGather::run(net, *network, points, gatherParams);
+            if (!g.success) {
+                note("  failed: " + g.errorMessage);
+                continue;
+            }
+
+            QJsonObject rec{
+                {"experiment", "density_gather"},
+                {"scenario", QDir(scenarioDir).dirName()},
+                {"activity_type", type},
+                {"run", run + 1},
+                {"bandwidth_m", bandwidth},
+                {"lixel_m", lixelLength},
+                {"places", qint64(g.pointsInput - g.pointsMerged)},
+                {"points_placed", qint64(g.pointsPlaced)},
+                {"searched_edges", qint64(g.searchedEdges)},
+                {"considered_edges", qint64(g.consideredEdges)},
+                {"searches", qint64(g.searches)},
+                {"total_edges", qint64(net.edgeCount())},
+                {"lixels_total", qint64(g.lixelsTotal)},
+                {"lixels_nonzero", qint64(g.lixels.size())},
+                {"seconds", g.seconds},
+                {"resident_kb", residentKb()},
+            };
+
+            // Confirm the two directions really do compute the same map. Only
+            // the first run needs it; the maps do not vary between repeats.
+            if (run == 0) {
+                const simvis::NkdeScatter::Result s =
+                    simvis::NkdeScatter::run(net, *network, points, params);
+                if (s.success) {
+                    const auto agree =
+                        simvis::NkdeGather::verify(s.lixels, g.lixels);
+                    rec["verify_comparable"] = agree.comparable;
+                    rec["verify_lixels"] = qint64(agree.compared);
+                    rec["verify_max_abs"] = agree.maxAbsolute;
+                    rec["verify_max_rel"] = agree.maxRelative;
+                    rec["scatter_seconds"] = s.seconds;
+                    rec["scatter_searches"] = qint64(2 * s.sourceEdges);
+                    note(QString("  agreement: %1 lixels, max rel %2")
+                         .arg(agree.compared)
+                         .arg(agree.maxRelative, 0, 'e', 2));
+                }
             }
             emitRecord(rec);
         }
@@ -488,9 +559,12 @@ int main(int argc, char* argv[]) {
         "lixel", "Lixel length in meters (default 25).", "m", "25");
     const QCommandLineOption repeatOpt(
         "repeat", "Repeat each density run N times (default 1).", "n", "1");
+    const QCommandLineOption gatherOpt(
+        "gather", "Also run the standard lixel-driven baseline and compare. "
+                  "Much slower: expect minutes per activity type.");
 
     parser.addOptions({scenarioOpt, forceOpt, typeOpt, bandwidthOpt,
-                       lixelOpt, repeatOpt});
+                       lixelOpt, repeatOpt, gatherOpt});
     parser.process(app);
 
     const QStringList args = parser.positionalArguments();
@@ -518,7 +592,8 @@ int main(int argc, char* argv[]) {
         return cmdDensity(scenario, parser.value(typeOpt),
                           parser.value(bandwidthOpt).toDouble(),
                           parser.value(lixelOpt).toInt(),
-                          std::max(1, parser.value(repeatOpt).toInt()));
+                          std::max(1, parser.value(repeatOpt).toInt()),
+                          parser.isSet(gatherOpt));
 
     note("Unknown command: " + command);
     parser.showHelp(1);

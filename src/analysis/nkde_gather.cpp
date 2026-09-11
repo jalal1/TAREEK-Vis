@@ -1,22 +1,19 @@
-#include "nkde_scatter.h"
+#include "nkde_gather.h"
 
+#include "analysis/nkde_scatter.h"
 #include "core/logger.h"
 #include "data/network_index.h"
 
 #include <QElapsedTimer>
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 #include <limits>
 #include <queue>
-#include <unordered_set>
 
 namespace simvis {
 
 namespace {
 
-// A lixel, before it is given world coordinates: which edge it sits on and how
-// far along that edge its midpoint is.
 struct LixelSlot {
     uint32_t edgeIndex;
     float    distFromN1;
@@ -24,65 +21,18 @@ struct LixelSlot {
 
 constexpr double kInfinity = std::numeric_limits<double>::max();
 
-// Set when the application is closing or the scenario changes, so a run in
-// progress gives up instead of holding the process open.
-std::atomic<bool> g_cancelled{false};
-
 } // namespace
 
-std::vector<ActivityRecord> NkdeScatter::uniquePlaces(
-        const std::vector<ActivityRecord>& points) {
-    // Key on the person and the exact stored coordinate. Coordinates come
-    // from the event attributes unchanged, so the two episodes of one home
-    // carry bit-identical floats and compare equal without a tolerance.
-    // Comparing bit patterns also keeps this exact rather than distance-based:
-    // two nearby but distinct places are never merged.
-    struct Key {
-        uint32_t person;
-        uint32_t x;
-        uint32_t y;
-        bool operator==(const Key& o) const {
-            return person == o.person && x == o.x && y == o.y;
-        }
-    };
-    struct KeyHash {
-        size_t operator()(const Key& k) const {
-            size_t h = k.person;
-            h = h * 31 + k.x;
-            h = h * 31 + k.y;
-            return h;
-        }
-    };
-
-    std::vector<ActivityRecord> unique;
-    unique.reserve(points.size());
-    std::unordered_set<Key, KeyHash> seen;
-    seen.reserve(points.size() * 2);
-
-    for (const auto& act : points) {
-        Key k{act.personId, 0, 0};
-        std::memcpy(&k.x, &act.x, sizeof(k.x));
-        std::memcpy(&k.y, &act.y, sizeof(k.y));
-        if (seen.insert(k).second) unique.push_back(act);
-    }
-    return unique;
-}
-
-void NkdeScatter::cancelAll() { g_cancelled.store(true); }
-bool NkdeScatter::cancelled() { return g_cancelled.load(); }
-void NkdeScatter::resetCancel() { g_cancelled.store(false); }
-const std::atomic<bool>* NkdeScatter::cancelFlag() { return &g_cancelled; }
-
-NkdeScatter::Result NkdeScatter::run(const NkdvNetwork& net,
-                                     const NetworkIndex& network,
-                                     const std::vector<ActivityRecord>& points,
-                                     const Params& params,
-                                     const std::atomic<bool>* cancelled) {
+NkdeGather::Result NkdeGather::run(const NkdvNetwork& net,
+                                   const NetworkIndex& network,
+                                   const std::vector<ActivityRecord>& points,
+                                   const Params& params,
+                                   const std::atomic<bool>* cancelled) {
     Result result;
     QElapsedTimer timer;
     timer.start();
 
-    if (cancelled == nullptr) cancelled = cancelFlag();
+    if (cancelled == nullptr) cancelled = NkdeScatter::cancelFlag();
 
     const size_t edgeCount = net.edgeCount();
     const size_t nodeCount = net.nodeCount();
@@ -91,15 +41,12 @@ NkdeScatter::Result NkdeScatter::run(const NkdvNetwork& net,
         return result;
     }
 
-    // One place per person, not one per episode. An agent that returns home in
-    // the evening writes a second Home record at the same coordinate, and
-    // counting both would weight that home twice. See uniquePlaces().
-    const std::vector<ActivityRecord> places = uniquePlaces(points);
+    // Identical input preparation to the scatter form, so the two differ only
+    // in the order they visit things.
+    const std::vector<ActivityRecord> places = NkdeScatter::uniquePlaces(points);
     result.pointsInput = points.size();
     result.pointsMerged = points.size() - places.size();
 
-    // Place the activities. This is the same placement the file-based path
-    // uses, so both engines see identical input.
     const std::vector<std::vector<float>> pointsPerEdge =
         net.placePoints(places, network, result.pointsPlaced, result.pointsSkipped);
     if (result.pointsPlaced == 0) {
@@ -113,8 +60,6 @@ NkdeScatter::Result NkdeScatter::run(const NkdvNetwork& net,
     const double lixelLength = static_cast<double>(params.lixelLength);
     const double invBandwidthSq = 1.0 / (params.bandwidth * params.bandwidth);
 
-    // Adjacency, and the edges meeting at each node. The second is how a search
-    // finds the edges it reached without scanning the whole network.
     std::vector<std::vector<std::pair<uint32_t, float>>> adjacency(nodeCount);
     std::vector<std::vector<uint32_t>> nodeEdges(nodeCount);
     for (size_t e = 0; e < edgeCount; ++e) {
@@ -125,8 +70,6 @@ NkdeScatter::Result NkdeScatter::run(const NkdvNetwork& net,
         nodeEdges[edge.n2].push_back(static_cast<uint32_t>(e));
     }
 
-    // Lay out the lixels: each edge is cut into pieces of `lixelLength`, with a
-    // shorter remainder at the end, and each piece contributes its midpoint.
     std::vector<LixelSlot> lixelSlots;
     std::vector<size_t> firstLixelOfEdge(edgeCount + 1, 0);
     lixelSlots.reserve(static_cast<size_t>(net.totalLength() / lixelLength) + edgeCount);
@@ -147,10 +90,9 @@ NkdeScatter::Result NkdeScatter::run(const NkdvNetwork& net,
 
     std::vector<double> density(lixelSlots.size(), 0.0);
 
-    // Search state. These persist across searches and are reset by a stamp
-    // rather than by rewriting them: a search reaches a few hundred nodes out
-    // of hundreds of thousands, so clearing the whole array would cost far more
-    // than the search itself.
+    // Same stamped scratch arrays as the scatter form. Giving the baseline this
+    // optimization matters: without it the comparison would measure array
+    // clearing rather than direction.
     std::vector<double>   nodeDist(nodeCount, 0.0);
     std::vector<uint32_t> nodeStamp(nodeCount, 0);
     std::vector<double>   endpointDist[2] = {std::vector<double>(nodeCount, 0.0),
@@ -162,34 +104,35 @@ NkdeScatter::Result NkdeScatter::run(const NkdvNetwork& net,
     uint32_t stamp = 0;
     uint32_t candidateStamp = 0;
 
-    std::vector<uint32_t> reached;      // nodes one search settled
-    std::vector<uint32_t> reachedBoth;  // nodes either search settled
-    std::vector<uint32_t> candidates;   // edges either search reached
+    std::vector<uint32_t> reached;
+    std::vector<uint32_t> reachedBoth;
+    std::vector<uint32_t> candidates;
 
     using Entry = std::pair<double, uint32_t>;
     std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> queue;
 
-    for (size_t sourceEdge = 0; sourceEdge < edgeCount; ++sourceEdge) {
-        const std::vector<float>& sourcePoints = pointsPerEdge[sourceEdge];
-        if (sourcePoints.empty()) continue;
-        ++result.sourceEdges;
+    // The gather loop: every edge that holds lixels is searched from, whether
+    // or not anything is near it. That is the cost the inversion removes -- on
+    // this data most of these searches return nothing usable.
+    for (size_t targetEdge = 0; targetEdge < edgeCount; ++targetEdge) {
+        if (firstLixelOfEdge[targetEdge] == firstLixelOfEdge[targetEdge + 1])
+            continue;
+        ++result.searchedEdges;
 
         if (cancelled && cancelled->load()) {
             result.errorMessage = QObject::tr("Cancelled");
             return result;
         }
 
-        const auto source = net.edge(sourceEdge);
-        const double sourceLength = source.length;
-        const uint32_t endpoints[2] = {source.n1, source.n2};
+        const auto target = net.edge(targetEdge);
+        const double targetLength = target.length;
+        const uint32_t endpoints[2] = {target.n1, target.n2};
 
         reachedBoth.clear();
 
-        // One bounded search from each end of the source edge. A point sitting
-        // `offset` along the edge is (offset) from n1 and (length - offset)
-        // from n2, so these two searches describe every point on it.
         for (int side = 0; side < 2; ++side) {
             ++stamp;
+            ++result.searches;
             reached.clear();
 
             const uint32_t start = endpoints[side];
@@ -205,8 +148,6 @@ NkdeScatter::Result NkdeScatter::run(const NkdvNetwork& net,
 
                 for (const auto& [neighbor, weight] : adjacency[node]) {
                     const double next = distance + weight;
-                    // Past the cutoff the kernel cannot move a color step, so
-                    // the search stops rather than crossing the whole network.
                     if (next > cutoff) continue;
                     if (nodeStamp[neighbor] != stamp) {
                         nodeStamp[neighbor] = stamp;
@@ -227,10 +168,9 @@ NkdeScatter::Result NkdeScatter::run(const NkdvNetwork& net,
             }
         }
 
-        const uint32_t stampN2 = stamp;        // the second search's stamp
-        const uint32_t stampN1 = stamp - 1;    // the first search's stamp
+        const uint32_t stampN2 = stamp;
+        const uint32_t stampN1 = stamp - 1;
 
-        // Every edge meeting a settled node is a candidate to receive density.
         ++candidateStamp;
         candidates.clear();
         for (uint32_t node : reachedBoth) {
@@ -250,40 +190,45 @@ NkdeScatter::Result NkdeScatter::run(const NkdvNetwork& net,
                                                      : kInfinity;
         };
 
-        for (uint32_t targetEdge : candidates) {
-            const auto target = net.edge(targetEdge);
-            const double fromN1ToT1 = distanceFrom(0, target.n1);
-            const double fromN1ToT2 = distanceFrom(0, target.n2);
-            const double fromN2ToT1 = distanceFrom(1, target.n1);
-            const double fromN2ToT2 = distanceFrom(1, target.n2);
-            if (fromN1ToT1 >= kInfinity && fromN1ToT2 >= kInfinity &&
-                fromN2ToT1 >= kInfinity && fromN2ToT2 >= kInfinity) {
+        const size_t begin = firstLixelOfEdge[targetEdge];
+        const size_t end = firstLixelOfEdge[targetEdge + 1];
+
+        // Now pull: for each edge in reach, add every point it carries to every
+        // lixel of this edge.
+        for (uint32_t sourceEdge : candidates) {
+            const std::vector<float>& sourcePoints = pointsPerEdge[sourceEdge];
+            if (sourcePoints.empty()) continue;
+
+            const auto source = net.edge(sourceEdge);
+            const double sourceLength = source.length;
+
+            // Endpoint-to-endpoint distances, hoisted out of the lixel loop
+            // because they do not depend on which lixel is being filled. This
+            // mirrors the hoist the scatter form performs.
+            const double t1ToS1 = distanceFrom(0, source.n1);
+            const double t2ToS1 = distanceFrom(1, source.n1);
+            const double t1ToS2 = distanceFrom(0, source.n2);
+            const double t2ToS2 = distanceFrom(1, source.n2);
+            if (t1ToS1 >= kInfinity && t2ToS1 >= kInfinity &&
+                t1ToS2 >= kInfinity && t2ToS2 >= kInfinity) {
                 continue;
             }
-
-            const double targetLength = target.length;
-            const size_t begin = firstLixelOfEdge[targetEdge];
-            const size_t end = firstLixelOfEdge[targetEdge + 1];
 
             for (size_t li = begin; li < end; ++li) {
                 const double alongTarget = lixelSlots[li].distFromN1;
                 const double toTargetEnd = targetLength - alongTarget;
 
-                // Reaching this lixel means leaving the source edge by one end
-                // and entering the target edge by one end. Hoisted out of the
-                // point loop, because it does not depend on the point.
-                const double viaSourceN1 =
-                    std::min(fromN1ToT1 + alongTarget, fromN1ToT2 + toTargetEnd);
-                const double viaSourceN2 =
-                    std::min(fromN2ToT1 + alongTarget, fromN2ToT2 + toTargetEnd);
+                // Distance from this lixel out to each end of the source edge,
+                // leaving the target edge by whichever end is nearer.
+                const double viaN1 = std::min(t1ToS1 + alongTarget,
+                                              t2ToS1 + toTargetEnd);
+                const double viaN2 = std::min(t1ToS2 + alongTarget,
+                                              t2ToS2 + toTargetEnd);
 
                 double sum = 0.0;
                 for (float offset : sourcePoints) {
-                    double distance = std::min(offset + viaSourceN1,
-                                               (sourceLength - offset) + viaSourceN2);
-                    // On the source edge itself the two may share a stretch of
-                    // road, so the direct distance along the edge can be
-                    // shorter than any path through a node.
+                    double distance = std::min(offset + viaN1,
+                                               (sourceLength - offset) + viaN2);
                     if (targetEdge == sourceEdge) {
                         distance = std::min(distance, std::fabs(offset - alongTarget));
                     }
@@ -295,8 +240,6 @@ NkdeScatter::Result NkdeScatter::run(const NkdvNetwork& net,
         }
     }
 
-    // Give every lixel its world position, the same way the file-based path
-    // does, so a map means the same thing whichever engine produced it.
     result.lixels.reserve(lixelSlots.size());
     for (size_t i = 0; i < lixelSlots.size(); ++i) {
         if (!(density[i] > 0.0)) continue;
@@ -323,15 +266,33 @@ NkdeScatter::Result NkdeScatter::run(const NkdvNetwork& net,
     result.seconds = timer.elapsed() / 1000.0;
     result.success = true;
 
-    LOG_INFO(QString("NkdeScatter: %1 lixels in %2 s (%3 source edges of %4, "
+    LOG_INFO(QString("NkdeGather: %1 lixels in %2 s (%3 searches over %4 edges, "
                      "%5 activities)")
         .arg(result.lixels.size())
         .arg(result.seconds, 0, 'f', 2)
-        .arg(result.sourceEdges)
-        .arg(edgeCount)
+        .arg(result.searches)
+        .arg(result.searchedEdges)
         .arg(result.pointsPlaced));
 
     return result;
+}
+
+NkdeGather::Agreement NkdeGather::verify(
+        const std::vector<NkdvNetwork::Lixel>& a,
+        const std::vector<NkdvNetwork::Lixel>& b) {
+    Agreement out;
+    if (a.size() != b.size()) return out;
+    out.comparable = true;
+    out.compared = a.size();
+    for (size_t i = 0; i < a.size(); ++i) {
+        const double x = a[i].value;
+        const double y = b[i].value;
+        const double diff = std::fabs(x - y);
+        out.maxAbsolute = std::max(out.maxAbsolute, diff);
+        const double scale = std::max(std::fabs(x), std::fabs(y));
+        if (scale > 0.0) out.maxRelative = std::max(out.maxRelative, diff / scale);
+    }
+    return out;
 }
 
 } // namespace simvis

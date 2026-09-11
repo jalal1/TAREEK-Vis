@@ -123,6 +123,59 @@ if(WIN32)
     )
 endif()
 
+# ---------------------------------------------------------------------------
+# tareek-bench: headless benchmark driver
+#
+# The desktop app needs a display and a GPU, which a compute node has neither
+# of. This second target exposes the same parse / index / density pipeline as a
+# batch program, so the paper's measurements can run on a headless machine and
+# be repeated exactly.
+#
+# It links Qt6::Core only. Every stage it drives already depends on nothing
+# more, and keeping it that way is the point: if this target ever needs Widgets
+# or OpenGL, logic has leaked into the wrong layer.
+# ---------------------------------------------------------------------------
+set(BENCH_SOURCES
+    src/tools/benchmark_main.cpp
+    src/core/types.cpp
+    src/core/transit_types.cpp
+    src/core/logger.cpp
+    src/parsers/network_parser.cpp
+    src/parsers/event_parser.cpp
+    src/parsers/preprocessor.cpp
+    src/parsers/transit_schedule_parser.cpp
+    src/data/network_index.cpp
+    src/data/vehicle_index.cpp
+    src/analysis/nkdv_network.cpp
+    src/analysis/nkde_scatter.cpp
+    # The gather-form baseline is measured by tareek-bench only; the
+    # application ships the scatter form alone.
+    src/analysis/nkde_gather.cpp
+    src/analysis/heatmap_cache.cpp
+    third_party/pugixml.cpp
+)
+
+add_executable(tareek-bench ${BENCH_SOURCES})
+
+target_compile_definitions(tareek-bench PRIVATE
+    TAREEK_VIS_VERSION="${PROJECT_VERSION}"
+)
+
+target_include_directories(tareek-bench PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/third_party
+)
+
+target_link_libraries(tareek-bench PRIVATE
+    Qt6::Core
+    ZLIB::ZLIB
+)
+
+# Copy sample data for testing, if present locally (not part of the repo)
+if(EXISTS ${CMAKE_SOURCE_DIR}/inputs)
+    file(COPY ${CMAKE_SOURCE_DIR}/inputs DESTINATION ${CMAKE_BINARY_DIR})
+endif()
+
 # Copy FFmpeg to build directory if it exists
 if(EXISTS ${CMAKE_SOURCE_DIR}/ffmpeg)
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD

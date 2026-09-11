@@ -50,7 +50,9 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Verify build output
-        run: test -x build/TAREEK-Vis
+        run: |
+          test -x build/TAREEK-Vis
+          test -x build/tareek-bench
 
   # Windows builds under MSYS2 UCRT64, matching release.yml and the toolchain
   # the project is developed with. The MSVC runners carry no zlib, so
@@ -85,4 +87,6 @@ jobs:
 
       - name: Verify build output
         shell: msys2 {0}
-        run: test -f build/TAREEK-Vis.exe
+        run: |
+          test -f build/TAREEK-Vis.exe
+          test -f build/tareek-bench.exe

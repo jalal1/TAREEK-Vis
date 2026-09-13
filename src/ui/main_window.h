@@ -20,6 +20,10 @@
 #include "screenshot_exporter.h"
 #include "analysis/nkdv_network.h"
 #include "analysis/heatmap_cache.h"
+#include <QtConcurrent>
+#include <QFutureWatcher>
+#include <unordered_map>
+#include <vector>
 
 namespace simvis {
 
@@ -42,6 +46,12 @@ public slots:
 protected:
     void keyPressEvent(QKeyEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
+
+    // Dropping a scenario folder onto the window loads it. Finding the right
+    // three files inside a MATSim output directory is the step users get wrong
+    // most often, and dragging the folder skips it entirely.
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private slots:
     // Compute and show the density map for one activity type. Runs on a worker
@@ -302,6 +312,9 @@ private:
 
     // CRS info
     CRSInfo networkCrs_;
+
+    std::unordered_map<uint32_t, std::vector<uint32_t>> linkHourlyVolumes_;
+    QFutureWatcher<std::unordered_map<uint32_t, std::vector<uint32_t>>> volumeWatcher_;
 
     // Throttle for live vehicle-info panel refresh (sim seconds of last update)
     float lastVehicleInfoRefreshTime_ = -1.0f;

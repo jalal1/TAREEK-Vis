@@ -30,8 +30,13 @@
 #include <QProgressDialog>
 #include <QInputDialog>
 #include <QSettings>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QUrl>
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 namespace simvis {
 
@@ -40,6 +45,7 @@ MainWindow::MainWindow(QWidget* parent)
 {
     setWindowTitle("TAREEK-Vis - Simulation Visualizer");
     resize(1280, 800);
+    setAcceptDrops(true);
 
     setupUi();
     setupMenus();
@@ -153,6 +159,12 @@ void MainWindow::setupUi() {
     // Single-trip overlay when a trip card is clicked
     connect(infoPanel_, &InfoPanel::tripClicked,
             this, &MainWindow::onTripClicked);
+
+    connect(&volumeWatcher_, &QFutureWatcher<std::unordered_map<uint32_t, std::vector<uint32_t>>>::finished, this, [this]() {
+        linkHourlyVolumes_ = volumeWatcher_.result();
+        LOG_INFO("Background volume aggregation completed.");
+    });
+
 }
 
 void MainWindow::setupMenus() {
@@ -1000,6 +1012,34 @@ void MainWindow::loadBinaryFiles() {
 
     // Fit view to network
     mapWidget_->fitToNetwork();
+
+    VehicleIndex* vIdx = vehicleIndex_.get();
+    QFuture<std::unordered_map<uint32_t, std::vector<uint32_t>>> future = QtConcurrent::run([vIdx]() {
+        std::unordered_map<uint32_t, std::vector<uint32_t>> volumes;
+        if (!vIdx) return volumes;
+        
+        size_t count = vIdx->vehicleCount();
+        for (size_t i = 0; i < count; ++i) {
+            const auto* traj = vIdx->trajectory(static_cast<uint32_t>(i));
+            if (!traj) continue;
+            
+            for (const auto& seg : traj->segments) {
+                const float seconds = VehicleIndex::toSeconds(seg.enterTime);
+                if (seconds < 0.0f) continue;
+
+                // MATSim counts seconds from midnight and routinely runs past
+                // 24:00 - this scenario ends at 107999s, hour 29 - so fold back
+                // to hour of day. Truncating at 23 silently dropped every trip
+                // after midnight instead of counting it against the right hour.
+                const int hour = static_cast<int>(seconds / 3600.0f) % 24;
+
+                if (volumes[seg.linkId].empty()) volumes[seg.linkId].assign(24, 0);
+                volumes[seg.linkId][hour]++;
+            }
+        }
+        return volumes;
+    });
+    volumeWatcher_.setFuture(future);
 }
 
 namespace {
@@ -1506,6 +1546,46 @@ void MainWindow::keyPressEvent(QKeyEvent* event) {
         default:
             QMainWindow::keyPressEvent(event);
     }
+}
+
+namespace {
+
+// A drop is loadable if it carries a directory, or a file we can take the
+// containing directory from. loadFolder() then does the usual resolution, so a
+// user can drag either the scenario folder or any one file inside it.
+QString droppedScenarioPath(const QMimeData* mime) {
+    if (!mime || !mime->hasUrls()) return QString();
+
+    for (const QUrl& url : mime->urls()) {
+        if (!url.isLocalFile()) continue;
+        const QFileInfo info(url.toLocalFile());
+        if (info.isDir()) return info.absoluteFilePath();
+        if (info.isFile()) {
+            const QString name = info.fileName();
+            if (name.endsWith(".xml", Qt::CaseInsensitive) ||
+                name.endsWith(".xml.gz", Qt::CaseInsensitive)) {
+                return info.absolutePath();
+            }
+        }
+    }
+    return QString();
+}
+
+} // namespace
+
+void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
+    if (!droppedScenarioPath(event->mimeData()).isEmpty()) {
+        event->acceptProposedAction();
+    }
+}
+
+void MainWindow::dropEvent(QDropEvent* event) {
+    const QString path = droppedScenarioPath(event->mimeData());
+    if (path.isEmpty()) return;
+
+    event->acceptProposedAction();
+    LOG_INFO(QString("Scenario dropped onto window: %1").arg(path));
+    loadFolder(path);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -2109,6 +2189,12 @@ void MainWindow::onNetworkLinkClicked(uint32_t linkId) {
             info.countStationId =
                 QString::fromStdString(countsData_->counts[it->second].stationId);
         }
+    }
+    auto volIt = linkHourlyVolumes_.find(linkId);
+    if (volIt != linkHourlyVolumes_.end()) {
+        info.hourlyVolumes = volIt->second;
+    } else {
+        info.hourlyVolumes.assign(24, 0); // No traffic recorded
     }
 
     infoPanel_->showLinkInfo(info);

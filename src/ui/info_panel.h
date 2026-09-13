@@ -1,5 +1,5 @@
 #pragma once
-
+#include <QGraphicsLayout>
 #include <QWidget>
 #include <QVBoxLayout>
 #include <QScrollArea>
@@ -69,6 +69,7 @@ public:
         QString roadType;
         bool hasCounts = false;     // a count station is attached to this link
         QString countStationId;
+        std::vector<uint32_t> hourlyVolumes; // 24 elements representing traffic per hour
     };
     void showLinkInfo(const LinkInfo& info);
 

@@ -41,6 +41,7 @@ set(SOURCES
     src/ui/main_window.cpp
     src/ui/map_widget.cpp
     src/ui/info_panel.cpp
+    src/ui/hourly_volume_chart.cpp
     src/ui/timeline_widget.cpp
     src/ui/progress_dialog.cpp
     src/ui/video_settings_dialog.cpp
@@ -79,6 +80,7 @@ set(HEADERS
     src/ui/main_window.h
     src/ui/map_widget.h
     src/ui/info_panel.h
+    src/ui/hourly_volume_chart.h
     src/ui/panel_style.h
     src/ui/timeline_widget.h
     src/ui/progress_dialog.h

@@ -20,6 +20,8 @@ class QPainter;
 #include "data/network_index.h"
 #include "data/vehicle_index.h"
 
+class QPainter;
+
 namespace simvis {
 
 class VideoRecorder;  // Forward declaration
@@ -177,6 +179,10 @@ private:
     void updateProjection();
     void updateView();
     void updateVehicleHalo();  // sync tracked-vehicle halo position/visibility
+
+    // Shown until a scenario is loaded, so the first window is not a blank
+    // rectangle with no indication of what to do next
+    void drawEmptyState(QPainter& painter);
 
     // Nearest network link to a world point within radius (UINT32_MAX = none)
     uint32_t findNetworkLinkAt(double worldX, double worldY, double radius) const;

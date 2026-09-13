@@ -1,10 +1,12 @@
 #include "info_panel.h"
 #include "panel_style.h"
+#include "hourly_volume_chart.h"
 #include <QScrollBar>
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QMouseEvent>
 #include <QVariant>
+#include <algorithm>
 
 namespace simvis {
 
@@ -366,6 +368,29 @@ void InfoPanel::showLinkInfo(const LinkInfo& info) {
         };
         kv(0, "From", info.fromNode);
         kv(1, "To", info.toNode);
+    }
+
+    if (info.hourlyVolumes.size() == 24) {
+        addDivider();
+        addHeader("Hourly Volume");
+
+        auto* chart = new HourlyVolumeChart();
+        chart->setVolumes(info.hourlyVolumes);
+        contentLayout_->insertWidget(contentLayout_->count() - 1, chart);
+
+        uint32_t total = 0;
+        for (uint32_t v : info.hourlyVolumes) total += v;
+        if (total > 0) {
+            const int peak = static_cast<int>(
+                std::max_element(info.hourlyVolumes.begin(), info.hourlyVolumes.end())
+                - info.hourlyVolumes.begin());
+            addBody(QString("%1 vehicles over the day, busiest %2:00-%3:00")
+                        .arg(total)
+                        .arg(peak, 2, 10, QChar('0'))
+                        .arg((peak + 1) % 24, 2, 10, QChar('0')));
+        } else {
+            addBody("No vehicles recorded on this link.");
+        }
     }
 
     if (info.hasCounts) {

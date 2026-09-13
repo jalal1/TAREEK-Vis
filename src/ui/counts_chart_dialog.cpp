@@ -109,7 +109,10 @@ void CountsChartWidget::paintEvent(QPaintEvent* /*event*/) {
 
         // X-axis label (hour)
         p.setPen(QColor(180, 180, 180));
-        QString hourLabel = QString::number(i + 1);
+        // Hour of day, 0-23: index i holds the traffic from i:00 to i+1:00.
+        // Labelling it i+1 disagreed with the link histogram, which numbers the
+        // same data from 0.
+        QString hourLabel = QString::number(i);
         int labelX = static_cast<int>(groupX);
         int labelW = static_cast<int>(barGroupWidth);
         p.drawText(labelX, h - marginBottom + 5, labelW, 20,

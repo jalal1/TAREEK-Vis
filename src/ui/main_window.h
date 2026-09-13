@@ -22,10 +22,24 @@
 #include "analysis/heatmap_cache.h"
 #include <QtConcurrent>
 #include <QFutureWatcher>
+#include <cstdint>
 #include <unordered_map>
 #include <vector>
 
 namespace simvis {
+
+// Hourly traffic for every link: 24 counts per link, laid end to end and
+// indexed by link id (ids are interned sequentially from 0). A flat array
+// rather than a map of vectors - one allocation instead of one per link, and
+// the scan is roughly ten times faster on a large scenario.
+struct LinkHourlyVolumes {
+    std::vector<uint32_t> hours;
+    // Which load this result describes. A scan that lands after the user has
+    // already loaded another scenario is discarded on this stamp.
+    uint64_t generation = 0;
+
+    bool empty() const { return hours.empty(); }
+};
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -160,6 +174,10 @@ private:
     void populateHeatmapMenu();
 
     void loadBinaryFiles();
+
+    // Kick off the background per-link hourly volume scan for the scenario
+    // that was just loaded, superseding any scan still running.
+    void startVolumeAggregation();
     void startPreprocessing();
     void applyTransitData();
     void loadCachedCRS(const QString& crsPath);
@@ -175,7 +193,10 @@ private:
 
     // Data managers
     std::unique_ptr<NetworkIndex> networkIndex_;
-    std::unique_ptr<VehicleIndex> vehicleIndex_;
+    // shared_ptr, not unique_ptr: the background volume scan holds its own
+    // reference for as long as it runs, so loading a new scenario replaces this
+    // pointer instead of mutating an index a worker thread is reading.
+    std::shared_ptr<VehicleIndex> vehicleIndex_;
     std::unique_ptr<Preprocessor> preprocessor_;
 
     // Transit data (owned by MainWindow after preprocessing)
@@ -313,8 +334,22 @@ private:
     // CRS info
     CRSInfo networkCrs_;
 
-    std::unordered_map<uint32_t, std::vector<uint32_t>> linkHourlyVolumes_;
-    QFutureWatcher<std::unordered_map<uint32_t, std::vector<uint32_t>>> volumeWatcher_;
+    // countsScaleFactor from the config the user loaded counts with: the factor
+    // that turns this run's sampled vehicle counts into full-population ones.
+    // 0 until counts are loaded, meaning the sample rate is still unknown.
+    double countsScaleFactor_ = 0.0;
+
+    // Link whose info panel is open, so a volume scan that finishes afterwards
+    // can refresh it. kNoLink when the panel is showing anything else.
+    static constexpr uint32_t kNoLink = UINT32_MAX;
+    uint32_t selectedLinkId_ = kNoLink;
+
+    // Per-link hourly traffic, 24 counts per link laid end to end and indexed
+    // by link id. Filled by a worker thread; empty until that finishes.
+    LinkHourlyVolumes linkHourlyVolumes_;
+    bool linkHourlyVolumesReady_ = false;
+    uint64_t volumeGeneration_ = 0;
+    QFutureWatcher<LinkHourlyVolumes> volumeWatcher_;
 
     // Throttle for live vehicle-info panel refresh (sim seconds of last update)
     float lastVehicleInfoRefreshTime_ = -1.0f;

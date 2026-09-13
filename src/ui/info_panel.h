@@ -1,5 +1,5 @@
 #pragma once
-#include <QGraphicsLayout>
+
 #include <QWidget>
 #include <QVBoxLayout>
 #include <QScrollArea>
@@ -70,6 +70,9 @@ public:
         bool hasCounts = false;     // a count station is attached to this link
         QString countStationId;
         std::vector<uint32_t> hourlyVolumes; // 24 elements representing traffic per hour
+        // countsScaleFactor the user supplied with the counts file, or 0 when
+        // no counts are loaded and the sample rate is therefore unknown.
+        double volumeScaleFactor = 0.0;
     };
     void showLinkInfo(const LinkInfo& info);
 
@@ -87,6 +90,8 @@ private:
     void clearContent();
     QLabel* addHeader(const QString& text);
     QLabel* addBody(const QString& text);
+    // A line of plain text qualifying the figures above it.
+    QLabel* addCaption(const QString& text);
     QFrame* addDivider();
     QLabel* addClickableItem(const QString& text, std::function<void()> onClick);
 

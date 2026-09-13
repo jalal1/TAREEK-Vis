@@ -181,14 +181,18 @@ void HourlyVolumeChart::mouseMoveEvent(QMouseEvent* event) {
         update();
     }
     if (hour >= 0) {
-        // Spell out the clock range, so the hour numbering cannot be misread
+        // Spell out the clock range, so the hour numbering cannot be misread:
+        // "Hour 7" alone leaves it open whether that means 7:00 or 7:00-8:00.
+        const uint32_t v = volumes_[hour];
         QToolTip::showText(
             event->globalPosition().toPoint(),
-            tr("Hour %1  (%2:00-%3:00)\n%4 vehicles")
-                .arg(hour)
+            tr("%1:00-%2:00\n%3")
                 .arg(hour, 2, 10, QChar('0'))
-                .arg((hour + 1) % 24, 2, 10, QChar('0'))
-                .arg(volumes_[hour]),
+                // The last bar ends at 24:00, not 00:00: wrapping it to midnight
+                // reads as a range running backwards.
+                .arg(hour + 1, 2, 10, QChar('0'))
+                .arg(v == 0 ? tr("No vehicles")
+                            : tr("%n vehicle(s)", nullptr, static_cast<int>(v))),
             this);
     } else {
         QToolTip::hideText();

@@ -20,8 +20,6 @@ class QPainter;
 #include "data/network_index.h"
 #include "data/vehicle_index.h"
 
-class QPainter;
-
 namespace simvis {
 
 class VideoRecorder;  // Forward declaration

@@ -211,10 +211,11 @@ void CountsParser::computeSimulatedVolumes(
             if (countIdx < 0) continue;
 
             // Determine hour from leave time (ms -> seconds -> hour)
-            // MATSim's VolumesAnalyzer uses LinkLeaveEvent for counting
-            uint32_t seconds = seg.leaveTime / 1000;
-            uint32_t hour = seconds / 3600;
-            if (hour >= 24) hour = 23;  // Clamp late-night activity
+            // MATSim's VolumesAnalyzer uses LinkLeaveEvent for counting.
+            // Runs routinely pass 24:00, so fold back to hour of day: clamping
+            // to 23 piled every post-midnight trip onto the last hour and
+            // overstated it against the ground truth.
+            uint32_t hour = (seg.leaveTime / 3600000u) % 24u;
 
             counts.counts[countIdx].simulatedVolumes[hour]++;
         }

@@ -6,7 +6,7 @@
 #include <QGridLayout>
 #include <QMouseEvent>
 #include <QVariant>
-#include <algorithm>
+#include <cmath>
 
 namespace simvis {
 
@@ -87,6 +87,14 @@ QLabel* InfoPanel::addBody(const QString& text) {
     label->setStyleSheet("font-size: 11pt; padding-left: 8px;");
     label->setWordWrap(true);
     label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    contentLayout_->insertWidget(contentLayout_->count() - 1, label);
+    return label;
+}
+
+QLabel* InfoPanel::addCaption(const QString& text) {
+    auto* label = new QLabel(text, contentWidget_);
+    label->setStyleSheet("color: black; padding-left: 8px; padding-right: 8px;");
+    label->setWordWrap(true);
     contentLayout_->insertWidget(contentLayout_->count() - 1, label);
     return label;
 }
@@ -374,22 +382,34 @@ void InfoPanel::showLinkInfo(const LinkInfo& info) {
         addDivider();
         addHeader("Hourly Volume");
 
+        // Loading counts tells us the sample rate, so from then on the bars can
+        // show full-population traffic. Until then they are raw event counts
+        // and the caption below says so. A factor of exactly 1 still counts as
+        // known - the run is a full population - so the caveat goes away even
+        // though no multiplication is needed.
+        const bool rateKnown = info.volumeScaleFactor > 0.0;
+        const bool scaled = rateKnown &&
+                            std::abs(info.volumeScaleFactor - 1.0) > 1e-9;
+
+        std::vector<uint32_t> shown = info.hourlyVolumes;
+        if (scaled) {
+            for (uint32_t& v : shown) {
+                v = static_cast<uint32_t>(std::llround(v * info.volumeScaleFactor));
+            }
+        }
+
         auto* chart = new HourlyVolumeChart();
-        chart->setVolumes(info.hourlyVolumes);
+        chart->setVolumes(shown);
         contentLayout_->insertWidget(contentLayout_->count() - 1, chart);
 
         uint32_t total = 0;
-        for (uint32_t v : info.hourlyVolumes) total += v;
-        if (total > 0) {
-            const int peak = static_cast<int>(
-                std::max_element(info.hourlyVolumes.begin(), info.hourlyVolumes.end())
-                - info.hourlyVolumes.begin());
-            addBody(QString("%1 vehicles over the day, busiest %2:00-%3:00")
-                        .arg(total)
-                        .arg(peak, 2, 10, QChar('0'))
-                        .arg((peak + 1) % 24, 2, 10, QChar('0')));
-        } else {
+        for (uint32_t v : shown) total += v;
+
+        if (total == 0) {
             addBody("No vehicles recorded on this link.");
+        } else if (!rateKnown) {
+            addCaption("Simulated vehicles as counted in the events file. "
+                       "Not scaled to the full population.");
         }
     }
 

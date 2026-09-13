@@ -52,6 +52,7 @@ void MapWidget::setVehicleIndex(VehicleIndex* index) {
     if (vehicleRenderer_) {
         vehicleRenderer_->setVehicleIndex(index);
     }
+
     if (index) {
         minTime_ = VehicleIndex::toSeconds(index->minTime());
         maxTime_ = VehicleIndex::toSeconds(index->maxTime());
@@ -615,6 +616,7 @@ void MapWidget::paintGL() {
         if (networkRenderer_) {
             networkRenderer_->render();
         }
+
         // Density heatmap sits directly on the roads it describes, so it is
         // drawn just above the network and below every selection overlay.
         if (heatmapRenderer_) {
@@ -1147,6 +1149,7 @@ QImage MapWidget::renderToImage(int scaleFactor) {
 
     return image;
 }
+
 void MapWidget::drawHeatmapLegend(QPainter& painter, const QSize& deviceSize, qreal scale) {
     if (!heatmapRenderer_ || !heatmapRenderer_->visible() ||
         !heatmapRenderer_->hasData()) {

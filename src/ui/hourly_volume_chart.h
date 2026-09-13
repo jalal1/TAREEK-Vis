@@ -10,9 +10,10 @@ namespace simvis {
 //
 // Painted directly rather than with Qt Charts: QBarCategoryAxis elides its
 // category labels when 24 of them have to fit the 280px info panel, which left
-// no way to tell which hour a bar belonged to. Painting gives every hour its
-// own labelled slot at any panel width, and matches CountsChartWidget, which
-// already draws its 24-hour comparison the same way.
+// no way to tell which hour a bar belonged to. Painting gives every hour its own
+// slot and tick, numbers the even hours from 0, and names whichever hour is
+// under the cursor. It matches CountsChartWidget, which already draws its
+// 24-hour comparison the same way.
 class HourlyVolumeChart : public QWidget {
     Q_OBJECT
 

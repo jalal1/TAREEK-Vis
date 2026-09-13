@@ -10,12 +10,16 @@
 namespace simvis {
 namespace {
 
-// Room for the y-axis numbers and the axis caption. The hour-label band is
-// measured at paint time, since it depends on whether the labels stagger.
+// Room for the y-axis numbers and the axis caption.
 constexpr int kMarginLeft = 34;
 constexpr int kMarginRight = 6;
 constexpr int kMarginTop = 8;
 constexpr int kAxisCaptionBand = 14; // "Hour of Day"
+
+// Numbered hours get a long tick, the hours between them a short one, so every
+// hour is marked on the axis whether or not it carries a number.
+constexpr int kMajorTick = 4;
+constexpr int kMinorTick = 2;
 
 constexpr int kYTicks = 4;
 
@@ -27,6 +31,17 @@ uint32_t niceAxisMax(uint32_t peak) {
     if (peak <= 1000) return ((peak / 100) + 1) * 100;
     if (peak <= 10000) return ((peak / 1000) + 1) * 1000;
     return ((peak / 5000) + 1) * 5000;
+}
+
+// Numbers go on even hours: every second hour, or every fourth or sixth where
+// the panel is too narrow for that. Always counted from 0, so in the usual case
+// the axis reads 0, 2, 4 ... 22.
+int labelStep(const QFontMetrics& fm, double slotW) {
+    const int widest = fm.horizontalAdvance(QStringLiteral("22")) + 4;
+    for (int step : {2, 4, 6}) {
+        if (step * slotW >= widest) return step;
+    }
+    return 6;
 }
 
 } // namespace
@@ -54,13 +69,6 @@ QSize HourlyVolumeChart::sizeHint() const {
     return QSize(240, 200);
 }
 
-// Hour labels stay horizontal. Where 24 of them will not fit side by side they
-// drop onto two alternating rows rather than turning on their side, which keeps
-// every hour readable without asking anyone to tilt their head.
-static bool needsStaggeredLabels(const QFontMetrics& fm, double slotW) {
-    return fm.horizontalAdvance(QStringLiteral("24")) + 3 > slotW;
-}
-
 int HourlyVolumeChart::hourAt(int x) const {
     const int plotW = width() - kMarginLeft - kMarginRight;
     if (volumes_.size() != 24 || plotW <= 0) return -1;
@@ -82,10 +90,9 @@ void HourlyVolumeChart::paintEvent(QPaintEvent* /*event*/) {
     const QFontMetrics fm(tickFont);
     const int plotW = width() - kMarginLeft - kMarginRight;
     const double slotW = static_cast<double>(plotW) / 24.0;
-    const bool stagger = needsStaggeredLabels(fm, slotW);
+    const int step = labelStep(fm, slotW);
     const int labelRowH = fm.height();
-    const int tickLen = 3;
-    const int hourLabelBand = (stagger ? 2 : 1) * labelRowH + tickLen + 2;
+    const int hourLabelBand = labelRowH + kMajorTick + 2;
 
     const int plotH = height() - kMarginTop - hourLabelBand - kAxisCaptionBand;
     if (plotW < 60 || plotH < 40) return;
@@ -106,13 +113,14 @@ void HourlyVolumeChart::paintEvent(QPaintEvent* /*event*/) {
     }
 
     const double barW = std::max(2.0, slotW * 0.74);
-
     const QColor barColor(panelstyle::kAccent);
-    QColor hoverColor = barColor.lighter(135);
+    const QColor hoverColor = barColor.lighter(135);
+
+    auto centreOf = [&](int h) { return kMarginLeft + (h + 0.5) * slotW; };
 
     for (int h = 0; h < 24; ++h) {
-        const double slotX = kMarginLeft + h * slotW;
-        const double barX = slotX + (slotW - barW) / 2.0;
+        const double barX = kMarginLeft + h * slotW + (slotW - barW) / 2.0;
+        const bool hot = (h == hoverHour_);
 
         // Every hour keeps its slot. An hour with no traffic simply draws no
         // bar, which is what an empty hour should look like.
@@ -120,26 +128,38 @@ void HourlyVolumeChart::paintEvent(QPaintEvent* /*event*/) {
             const double barH =
                 static_cast<double>(volumes_[h]) / axisMax * plotH;
             p.fillRect(QRectF(barX, baseline - barH, barW, barH),
-                       h == hoverHour_ ? hoverColor : barColor);
+                       hot ? hoverColor : barColor);
         }
 
-        // Hour label, always upright and horizontal. When the slots are too
-        // narrow for 24 side by side, alternate hours drop to a second row
-        // instead of the numbers being turned on their side.
-        const int row = stagger ? (h % 2) : 0;
-        const bool hot = (h == hoverHour_);
-        const double centreX = slotX + slotW / 2.0;
-
-        // A tick per hour ties each number to its own slot, which matters most
-        // when the numbers alternate between two rows.
+        const int len = (h % step == 0) ? kMajorTick : kMinorTick;
         p.setPen(QPen(hot ? QColor(220, 220, 226) : QColor(120, 120, 126), 1));
-        p.drawLine(QPointF(centreX, baseline + 1),
-                   QPointF(centreX, baseline + 1 + tickLen));
+        p.drawLine(QPointF(centreOf(h), baseline + 1),
+                   QPointF(centreOf(h), baseline + 1 + len));
+    }
 
-        p.setPen(hot ? QColor(235, 235, 240) : QColor(150, 150, 155));
-        p.drawText(QRectF(centreX - slotW, baseline + tickLen + 2 + row * labelRowH,
-                          slotW * 2.0, labelRowH),
-                   Qt::AlignHCenter | Qt::AlignVCenter, QString::number(h + 1));
+    // Hour numbers, one row, starting from 0. The hour under the cursor is
+    // numbered too when it falls between two labels, and any label it would
+    // run into steps aside while it is shown.
+    auto labelRect = [&](int h) {
+        const double w = fm.horizontalAdvance(QString::number(h));
+        return QRectF(centreOf(h) - w / 2.0, baseline + kMajorTick + 2, w, labelRowH);
+    };
+
+    std::vector<int> numbered;
+    for (int h = 0; h < 24; h += step) numbered.push_back(h);
+
+    if (hoverHour_ >= 0 && hoverHour_ % step != 0) {
+        const QRectF hotRect = labelRect(hoverHour_).adjusted(-3, 0, 3, 0);
+        numbered.erase(std::remove_if(numbered.begin(), numbered.end(),
+                                      [&](int h) { return labelRect(h).intersects(hotRect); }),
+                       numbered.end());
+        numbered.push_back(hoverHour_);
+    }
+
+    for (int h : numbered) {
+        p.setPen(h == hoverHour_ ? QColor(235, 235, 240) : QColor(150, 150, 155));
+        p.drawText(labelRect(h).adjusted(-4, 0, 4, 0),
+                   Qt::AlignHCenter | Qt::AlignVCenter, QString::number(h));
     }
 
     // Axis line and caption
@@ -165,7 +185,7 @@ void HourlyVolumeChart::mouseMoveEvent(QMouseEvent* event) {
         QToolTip::showText(
             event->globalPosition().toPoint(),
             tr("Hour %1  (%2:00-%3:00)\n%4 vehicles")
-                .arg(hour + 1)
+                .arg(hour)
                 .arg(hour, 2, 10, QChar('0'))
                 .arg((hour + 1) % 24, 2, 10, QChar('0'))
                 .arg(volumes_[hour]),

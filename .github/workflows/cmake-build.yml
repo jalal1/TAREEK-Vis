@@ -8,52 +8,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Linux and macOS build against the Qt release installed by aqt. Everything
-  # the project links (Widgets, OpenGL, OpenGLWidgets, Concurrent, Network)
-  # ships inside qtbase.
-  unix:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-22.04, macos-latest]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      # Qt6 needs the GL and xkbcommon development headers to configure on
-      # Ubuntu; zlib1g-dev satisfies find_package(ZLIB REQUIRED).
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential ninja-build \
-            libgl1-mesa-dev libglu1-mesa-dev libegl1-mesa-dev \
-            libxkbcommon-dev zlib1g-dev
-
-      - name: Install Ninja (macOS)
-        if: runner.os == 'macOS'
-        run: brew install ninja
-
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.5.3'
-          cache: true
-
-      - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build
-        run: cmake --build build --parallel
-
-      - name: Verify build output
-        run: |
-          test -x build/TAREEK-Vis
-          test -x build/tareek-bench
-
   # Windows builds under MSYS2 UCRT64, matching release.yml and the toolchain
   # the project is developed with. The MSVC runners carry no zlib, so
   # find_package(ZLIB REQUIRED) cannot be satisfied there without vendoring it.

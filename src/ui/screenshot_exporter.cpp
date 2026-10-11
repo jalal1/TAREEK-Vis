@@ -160,4 +160,57 @@ bool ScreenshotExporter::exportPdf(MapWidget* mapWidget, QWidget* parent, int sc
     return true;
 }
 
+bool ScreenshotExporter::exportDrawing(QWidget* parent, const QString& title,
+                                       const QString& suggestedStem, const QSize& size,
+                                       const PaintFn& paint) {
+    QString filePath = QFileDialog::getSaveFileName(
+        parent, title,
+        suggestedStem.isEmpty() ? QString() : suggestedStem + ".png",
+        "PNG Image (*.png);;PDF Document (*.pdf)");
+    if (filePath.isEmpty()) return false;
+
+    const bool pdf = filePath.endsWith(".pdf", Qt::CaseInsensitive);
+    if (!pdf && !filePath.endsWith(".png", Qt::CaseInsensitive)) {
+        filePath += ".png";
+    }
+
+    bool ok = false;
+    const QRect area(QPoint(0, 0), size);
+    if (pdf) {
+        // At 96 DPI one PDF unit is one screen pixel, so the drawing code and
+        // its font sizes work unchanged, and the text stays as vectors.
+        QPdfWriter pdfWriter(filePath);
+        pdfWriter.setTitle(title);
+        pdfWriter.setCreator("TAREEK-Vis");
+        pdfWriter.setResolution(96);
+        const QSizeF mm(size.width() / 96.0 * 25.4, size.height() / 96.0 * 25.4);
+        pdfWriter.setPageLayout(QPageLayout(QPageSize(mm, QPageSize::Millimeter),
+                                            QPageLayout::Portrait, QMarginsF(0, 0, 0, 0)));
+        QPainter painter(&pdfWriter);
+        if (painter.isActive()) {
+            paint(painter, area);
+            ok = painter.end();
+        }
+    } else {
+        constexpr int kScale = 3;
+        QImage image(size * kScale, QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(kScale);
+        image.fill(Qt::white);
+        {
+            QPainter painter(&image);
+            paint(painter, area);
+        }
+        ok = image.save(filePath, "PNG");
+    }
+
+    if (ok) {
+        LOG_INFO(QString("Drawing exported: %1").arg(filePath));
+        QMessageBox::information(parent, title, QString("Saved to:\n%1").arg(filePath));
+    } else {
+        LOG_ERROR(QString("Drawing export failed: %1").arg(filePath));
+        QMessageBox::critical(parent, title, QString("Could not save the file:\n%1").arg(filePath));
+    }
+    return ok;
+}
+
 } // namespace simvis

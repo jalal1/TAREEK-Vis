@@ -34,6 +34,9 @@
 #include <QDropEvent>
 #include <QMimeData>
 #include <QUrl>
+#include <QDockWidget>
+#include <QLineEdit>
+#include <QToolTip>
 #include <algorithm>
 #include <cmath>
 #include <tuple>
@@ -109,6 +112,25 @@ void MainWindow::setupUi() {
     centralWidget->setLayout(layout);
     setCentralWidget(centralWidget);
 
+    // "Selected links" panel for what-if scenarios
+    scenarioPanel_ = new ScenarioPanel();
+    scenarioDock_ = new QDockWidget("Selected links", this);
+    scenarioDock_->setObjectName("scenarioDock");
+    scenarioDock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    scenarioDock_->setWidget(scenarioPanel_);
+    scenarioDock_->setMinimumWidth(320);
+    addDockWidget(Qt::RightDockWidgetArea, scenarioDock_);
+    scenarioDock_->hide();
+
+    connect(mapWidget_, &MapWidget::networkLinkCtrlClicked,
+            this, &MainWindow::onNetworkLinkCtrlClicked);
+    connect(scenarioPanel_, &ScenarioPanel::selectionChanged,
+            mapWidget_, &MapWidget::setSelectedLinks);
+    connect(scenarioPanel_, &ScenarioPanel::linkActivated, this, [this](uint32_t id) {
+        onNetworkLinkClicked(id);
+        zoomToLink(id);
+    });
+
     // Connect timeline signals
     connect(mapWidget_, &MapWidget::simulationTimeChanged,
             timelineWidget_, &TimelineWidget::setCurrentTime);
@@ -143,6 +165,7 @@ void MainWindow::setupUi() {
             this, &MainWindow::onInfoPanelPanTo);
 
     connect(infoPanel_, &InfoPanel::closeRequested, this, [this]() {
+        selectedLinkId_ = kNoLink;
         infoPanel_->hide();
         if (showInfoPanelAction_) showInfoPanelAction_->setChecked(false);
     });
@@ -406,7 +429,10 @@ void MainWindow::setupMenus() {
     showInfoPanelAction_->setChecked(false);
     connect(showInfoPanelAction_, &QAction::toggled, this, [this](bool checked) {
         infoPanel_->setVisible(checked);
-        if (!checked) infoPanel_->clear();
+        if (!checked) {
+            selectedLinkId_ = kNoLink;
+            infoPanel_->clear();
+        }
     });
 
     viewMenu->addSeparator();
@@ -454,6 +480,9 @@ void MainWindow::setupMenus() {
         mapWidget_->setTileSource(TileSource::Topo);
     });
 
+    viewMenu->addAction(scenarioDock_->toggleViewAction());
+    scenarioDock_->toggleViewAction()->setText("Show &Selected Links Panel");
+
     viewMenu->addSeparator();
 
     // --- Navigation section ---
@@ -468,6 +497,23 @@ void MainWindow::setupMenus() {
     auto* zoomOutAction = viewMenu->addAction("Zoom &Out");
     zoomOutAction->setShortcut(QKeySequence::ZoomOut);
     connect(zoomOutAction, &QAction::triggered, mapWidget_, &MapWidget::zoomOut);
+
+    // Find a link by its MATSim id. The box sits at the right end of the menu
+    // bar; Ctrl+F puts the cursor in it.
+    linkSearchEdit_ = new QLineEdit(this);
+    linkSearchEdit_->setPlaceholderText("Find link ID (Ctrl+F)");
+    linkSearchEdit_->setClearButtonEnabled(true);
+    linkSearchEdit_->setFixedWidth(200);
+    linkSearchEdit_->setToolTip("Type a MATSim link ID and press Enter");
+    connect(linkSearchEdit_, &QLineEdit::returnPressed, this, &MainWindow::onFindLink);
+    menuBar()->setCornerWidget(linkSearchEdit_, Qt::TopRightCorner);
+
+    auto* findLinkAction = viewMenu->addAction("Find &Link...");
+    findLinkAction->setShortcut(QKeySequence::Find);
+    connect(findLinkAction, &QAction::triggered, this, [this]() {
+        linkSearchEdit_->setFocus(Qt::ShortcutFocusReason);
+        linkSearchEdit_->selectAll();
+    });
 
     // Export menu
     auto* exportMenu = menuBar()->addMenu("&Export");
@@ -977,6 +1023,15 @@ void MainWindow::loadBinaryFiles() {
     QString networkBin = cacheDirectory_ + "/" + networkBaseName + ".bin";
     QString vidxPath = cacheDirectory_ + "/" + eventsBaseName + ".vidx";
 
+    // Internal link ids mean nothing in the network about to load. Keep the
+    // inspected link by its MATSim id, so the same road opens in this run, and
+    // drop the scenario selection: it belongs to the old baseline.
+    std::string carriedLinkId;
+    if (selectedLinkId_ != kNoLink && networkIndex_->getLink(selectedLinkId_))
+        carriedLinkId = linkOriginalId(selectedLinkId_).toStdString();
+    selectedLinkId_ = kNoLink;
+    scenarioPanel_->clearLinks();
+
     // Load network
     LOG_INFO(QString("Loading network binary: %1").arg(networkBin));
     if (!networkIndex_->loadFile(networkBin)) {
@@ -997,6 +1052,13 @@ void MainWindow::loadBinaryFiles() {
         LOG_ERROR(QString("Failed to load vehicle index: %1").arg(vidxPath));
         QMessageBox::critical(this, "Error", "Failed to load vehicle index file.");
         return;
+    }
+
+    {
+        QDir dir(QFileInfo(networkFilePath_).absolutePath());
+        if (dir.dirName().compare("output", Qt::CaseInsensitive) == 0) dir.cdUp();
+        experimentName_ = dir.dirName();
+        scenarioPanel_->setBaseExperiment(experimentName_);
     }
 
     // Connect to map widget
@@ -1041,6 +1103,20 @@ void MainWindow::loadBinaryFiles() {
     // Hourly link volumes for the info panel, on a worker thread. The scan
     // touches every segment in the scenario, so it must not block the load.
     startVolumeAggregation();
+
+    // After the scan has started, so the panel waits for this run's volumes
+    // rather than showing the last run's.
+    if (!carriedLinkId.empty()) {
+        const uint32_t id = networkIndex_->findLinkByOriginalId(carriedLinkId);
+        if (id != UINT32_MAX) {
+            onNetworkLinkClicked(id);
+            zoomToLink(id);
+        } else {
+            statusLabel_->setText(statusLabel_->text() +
+                QString("  |  Link %1 is not in this run.")
+                    .arg(QString::fromStdString(carriedLinkId)));
+        }
+    }
 }
 
 void MainWindow::startVolumeAggregation() {
@@ -2235,11 +2311,8 @@ void MainWindow::onNetworkLinkClicked(uint32_t linkId) {
     mapWidget_->highlightLink(linkId);
 
     InfoPanel::LinkInfo info;
-    const auto& linkIds = networkIndex_->linkIds();
-    if (linkId < linkIds.size())
-        info.linkId = QString::fromStdString(linkIds.getString(linkId));
-    else
-        info.linkId = QString::number(linkId);
+    info.linkId = linkOriginalId(linkId);
+    info.experimentName = experimentName_;
 
     const auto& nodeIds = networkIndex_->nodeIds();
     if (link->fromNode < nodeIds.size())
@@ -2275,6 +2348,95 @@ void MainWindow::onNetworkLinkClicked(uint32_t linkId) {
 
     infoPanel_->showLinkInfo(info);
     showInfoPanelAction_->setChecked(true);
+}
+
+QString MainWindow::linkOriginalId(uint32_t linkId) const {
+    const auto& linkIds = networkIndex_->linkIds();
+    if (linkId < linkIds.size())
+        return QString::fromStdString(linkIds.getString(linkId));
+    return QString::number(linkId);
+}
+
+ScenarioPanel::LinkRow MainWindow::scenarioRow(uint32_t linkId) const {
+    ScenarioPanel::LinkRow row;
+    row.internalId = linkId;
+    row.linkId = linkOriginalId(linkId);
+    if (const auto* link = networkIndex_->getLink(linkId)) {
+        const auto& nodeIds = networkIndex_->nodeIds();
+        if (link->fromNode < nodeIds.size())
+            row.fromNode = QString::fromStdString(nodeIds.getString(link->fromNode));
+        if (link->toNode < nodeIds.size())
+            row.toNode = QString::fromStdString(nodeIds.getString(link->toNode));
+        row.roadType = roadTypeName(static_cast<RoadType>(link->roadType));
+        row.lengthM = link->length;
+    }
+    return row;
+}
+
+void MainWindow::zoomToLink(uint32_t linkId) {
+    const auto* link = networkIndex_ ? networkIndex_->getLink(linkId) : nullptr;
+    if (!link) return;
+    const auto* a = networkIndex_->getNode(link->fromNode);
+    const auto* b = networkIndex_->getNode(link->toNode);
+    if (!a || !b) return;
+    BoundingBox box;
+    box.expand(a->x, a->y);
+    box.expand(b->x, b->y);
+    mapWidget_->zoomToBounds(box, 1.0);
+}
+
+void MainWindow::onNetworkLinkCtrlClicked(uint32_t linkId) {
+    if (!networkIndex_) return;
+    const auto* link = networkIndex_->getLink(linkId);
+    if (!link) return;
+
+    // The two directions of a road are drawn on top of each other, and the
+    // click finds only one of them. Take every link between the two nodes, in
+    // both directions, so the whole road is added or removed.
+    std::vector<uint32_t> group = networkIndex_->linksBetween(link->fromNode, link->toNode);
+    for (uint32_t id : networkIndex_->linksBetween(link->toNode, link->fromNode))
+        group.push_back(id);
+    if (std::find(group.begin(), group.end(), linkId) == group.end())
+        group.push_back(linkId);
+
+    if (scenarioPanel_->contains(linkId)) {
+        scenarioPanel_->removeLinks(group);
+        statusLabel_->setText(QString("Removed %1 link(s) from the selection.").arg(group.size()));
+        return;
+    }
+
+    std::vector<ScenarioPanel::LinkRow> rows;
+    rows.reserve(group.size());
+    for (uint32_t id : group) rows.push_back(scenarioRow(id));
+    scenarioPanel_->addLinks(rows);
+    scenarioDock_->show();
+    statusLabel_->setText(QString("Added %1 link(s) to the selection.").arg(group.size()));
+}
+
+void MainWindow::onFindLink() {
+    const QString wanted = linkSearchEdit_->text().trimmed();
+    if (wanted.isEmpty()) return;
+
+    auto complain = [this](const QString& message) {
+        statusLabel_->setText(message);
+        QToolTip::showText(linkSearchEdit_->mapToGlobal(
+                               QPoint(0, linkSearchEdit_->height())),
+                           message, linkSearchEdit_);
+    };
+
+    if (!networkIndex_ || networkIndex_->linkCount() == 0) {
+        complain("Open a run first.");
+        return;
+    }
+    const uint32_t id = networkIndex_->findLinkByOriginalId(wanted.toStdString());
+    if (id == UINT32_MAX) {
+        complain(QString("Link not found: %1").arg(wanted));
+        return;
+    }
+    onNetworkLinkClicked(id);
+    zoomToLink(id);
+    statusLabel_->setText(QString("Link %1").arg(wanted));
+    mapWidget_->setFocus();
 }
 
 void MainWindow::onCountLinkClicked(uint32_t linkId) {

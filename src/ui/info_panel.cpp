@@ -6,6 +6,7 @@
 #include <QGridLayout>
 #include <QMouseEvent>
 #include <QVariant>
+#include <QRegularExpression>
 #include <cmath>
 
 namespace simvis {
@@ -400,7 +401,30 @@ void InfoPanel::showLinkInfo(const LinkInfo& info) {
 
         auto* chart = new HourlyVolumeChart();
         chart->setVolumes(shown);
+
+        // An exported chart names the link, the run and the scale, so a
+        // baseline chart and a scenario chart cannot be mixed up.
+        QString scaleNote;
+        if (scaled)
+            scaleNote = QString("scaled x%1 to full population")
+                            .arg(info.volumeScaleFactor, 0, 'g', 6);
+        else if (rateKnown)
+            scaleNote = "full population";
+        else
+            scaleNote = "simulated vehicles, not scaled";
+        const QString exp = info.experimentName.isEmpty() ? QString("unknown run")
+                                                          : info.experimentName;
+        QString stem = QString("%1_link_%2").arg(exp, info.linkId);
+        stem.replace(QRegularExpression("[^A-Za-z0-9_.-]"), "_");
+        chart->setExportInfo(QString("Link %1 - hourly volume").arg(info.linkId),
+                             QString("%1  |  %2").arg(exp, scaleNote), stem);
         contentLayout_->insertWidget(contentLayout_->count() - 1, chart);
+
+        auto* exportButton = new QPushButton("Export chart...", contentWidget_);
+        exportButton->setCursor(Qt::PointingHandCursor);
+        exportButton->setToolTip("Save this chart as PNG or PDF");
+        connect(exportButton, &QPushButton::clicked, chart, &HourlyVolumeChart::exportChart);
+        contentLayout_->insertWidget(contentLayout_->count() - 1, exportButton);
 
         uint32_t total = 0;
         for (uint32_t v : shown) total += v;

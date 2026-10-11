@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <QString>
 #include <cstdint>
 #include <vector>
 
@@ -23,20 +24,44 @@ public:
     // Expects 24 entries, hour 0 first. Anything else clears the chart.
     void setVolumes(const std::vector<uint32_t>& volumes);
 
+    // Title and subtitle drawn on an exported chart (not on screen, where the
+    // info panel already names the link). `fileStem` is the suggested file
+    // name without extension.
+    void setExportInfo(const QString& title, const QString& subtitle,
+                       const QString& fileStem);
+
     QSize sizeHint() const override;
+
+public slots:
+    // Ask for a file and write the chart as PNG or PDF, by its extension.
+    void exportChart();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void leaveEvent(QEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
+
+public:
+    // Colors for one rendering (screen or paper), defined in the .cpp.
+    struct Colors;
 
 private:
+    // Draw the whole chart into `area`. The on-screen widget and the export
+    // share this, so the file shows what the panel shows.
+    void paintChart(QPainter& p, const QRect& area, const Colors& c,
+                    int hoverHour, bool withTitle) const;
+
     // Index of the hour slot under a widget-space x, or -1 outside the plot.
     int hourAt(int x) const;
 
     std::vector<uint32_t> volumes_;
     uint32_t maxVolume_ = 0;
     int hoverHour_ = -1;
+
+    QString exportTitle_;
+    QString exportSubtitle_;
+    QString exportFileStem_;
 };
 
 } // namespace simvis

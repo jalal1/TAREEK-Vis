@@ -1,6 +1,9 @@
 #include "hourly_volume_chart.h"
 #include "panel_style.h"
+#include "screenshot_exporter.h"
 
+#include <QContextMenuEvent>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QFontMetrics>
@@ -77,36 +80,93 @@ int HourlyVolumeChart::hourAt(int x) const {
     return std::clamp(hour, 0, 23);
 }
 
+// Colors for one rendering. The panel is dark; an exported file goes on white
+// paper, where the panel's light grid lines would not show.
+struct HourlyVolumeChart::Colors {
+    QColor background;  // invalid = leave transparent
+    QColor grid;
+    QColor value;       // y-axis numbers and hour numbers
+    QColor valueHot;    // the hour under the cursor
+    QColor tick;
+    QColor tickHot;
+    QColor axis;
+    QColor caption;
+    QColor title;
+};
+
+namespace {
+
+const HourlyVolumeChart::Colors& screenColors();
+const HourlyVolumeChart::Colors& paperColors();
+
+} // namespace
+
 void HourlyVolumeChart::paintEvent(QPaintEvent* /*event*/) {
     if (volumes_.size() != 24) return;
-
     QPainter p(this);
+    paintChart(p, rect(), screenColors(), hoverHour_, false);
+}
+
+void HourlyVolumeChart::paintChart(QPainter& p, const QRect& area, const Colors& c,
+                                   int hoverHour, bool withTitle) const {
+    if (volumes_.size() != 24) return;
+
+    p.save();
     p.setRenderHint(QPainter::Antialiasing);
+    if (c.background.isValid()) p.fillRect(area, c.background);
+    p.translate(area.topLeft());
+    const int areaW = area.width();
+    const int areaH = area.height();
+
+    // Title band for an exported chart: link and experiment, so two files
+    // (baseline and scenario) can be told apart.
+    int top = kMarginTop;
+    if (withTitle && !exportTitle_.isEmpty()) {
+        QFont titleFont = font();
+        titleFont.setPointSize(10);
+        titleFont.setBold(true);
+        QFont subFont = font();
+        subFont.setPointSize(8);
+        const int titleH = QFontMetrics(titleFont).height();
+        const int subH = exportSubtitle_.isEmpty() ? 0 : QFontMetrics(subFont).height();
+
+        p.setPen(c.title);
+        p.setFont(titleFont);
+        p.drawText(kMarginLeft, top, areaW - kMarginLeft - kMarginRight, titleH,
+                   Qt::AlignLeft | Qt::AlignVCenter, exportTitle_);
+        if (subH > 0) {
+            p.setPen(c.caption);
+            p.setFont(subFont);
+            p.drawText(kMarginLeft, top + titleH, areaW - kMarginLeft - kMarginRight, subH,
+                       Qt::AlignLeft | Qt::AlignVCenter, exportSubtitle_);
+        }
+        top += titleH + subH + 10;
+    }
 
     QFont tickFont = font();
     tickFont.setPointSize(7);
     p.setFont(tickFont);
 
     const QFontMetrics fm(tickFont);
-    const int plotW = width() - kMarginLeft - kMarginRight;
+    const int plotW = areaW - kMarginLeft - kMarginRight;
     const double slotW = static_cast<double>(plotW) / 24.0;
     const int step = labelStep(fm, slotW);
     const int labelRowH = fm.height();
     const int hourLabelBand = labelRowH + kMajorTick + 2;
 
-    const int plotH = height() - kMarginTop - hourLabelBand - kAxisCaptionBand;
-    if (plotW < 60 || plotH < 40) return;
+    const int plotH = areaH - top - hourLabelBand - kAxisCaptionBand;
+    if (plotW < 60 || plotH < 40) { p.restore(); return; }
 
-    const int baseline = kMarginTop + plotH;
+    const int baseline = top + plotH;
     const uint32_t axisMax = niceAxisMax(maxVolume_);
 
     // Horizontal grid with its value, so bar heights can be read off
     for (int i = 0; i <= kYTicks; ++i) {
         const int y = baseline - i * plotH / kYTicks;
-        p.setPen(QPen(QColor(255, 255, 255, 30), 1));
+        p.setPen(QPen(c.grid, 1));
         p.drawLine(kMarginLeft, y, kMarginLeft + plotW, y);
 
-        p.setPen(QColor(150, 150, 155));
+        p.setPen(c.value);
         p.drawText(0, y - 7, kMarginLeft - 4, 14,
                    Qt::AlignRight | Qt::AlignVCenter,
                    QString::number(static_cast<uint32_t>(i) * axisMax / kYTicks));
@@ -120,7 +180,7 @@ void HourlyVolumeChart::paintEvent(QPaintEvent* /*event*/) {
 
     for (int h = 0; h < 24; ++h) {
         const double barX = kMarginLeft + h * slotW + (slotW - barW) / 2.0;
-        const bool hot = (h == hoverHour_);
+        const bool hot = (h == hoverHour);
 
         // Every hour keeps its slot. An hour with no traffic simply draws no
         // bar, which is what an empty hour should look like.
@@ -132,7 +192,7 @@ void HourlyVolumeChart::paintEvent(QPaintEvent* /*event*/) {
         }
 
         const int len = (h % step == 0) ? kMajorTick : kMinorTick;
-        p.setPen(QPen(hot ? QColor(220, 220, 226) : QColor(120, 120, 126), 1));
+        p.setPen(QPen(hot ? c.tickHot : c.tick, 1));
         p.drawLine(QPointF(centreOf(h), baseline + 1),
                    QPointF(centreOf(h), baseline + 1 + len));
     }
@@ -148,31 +208,92 @@ void HourlyVolumeChart::paintEvent(QPaintEvent* /*event*/) {
     std::vector<int> numbered;
     for (int h = 0; h < 24; h += step) numbered.push_back(h);
 
-    if (hoverHour_ >= 0 && hoverHour_ % step != 0) {
-        const QRectF hotRect = labelRect(hoverHour_).adjusted(-3, 0, 3, 0);
+    if (hoverHour >= 0 && hoverHour % step != 0) {
+        const QRectF hotRect = labelRect(hoverHour).adjusted(-3, 0, 3, 0);
         numbered.erase(std::remove_if(numbered.begin(), numbered.end(),
                                       [&](int h) { return labelRect(h).intersects(hotRect); }),
                        numbered.end());
-        numbered.push_back(hoverHour_);
+        numbered.push_back(hoverHour);
     }
 
     for (int h : numbered) {
-        p.setPen(h == hoverHour_ ? QColor(235, 235, 240) : QColor(150, 150, 155));
+        p.setPen(h == hoverHour ? c.valueHot : c.value);
         p.drawText(labelRect(h).adjusted(-4, 0, 4, 0),
                    Qt::AlignHCenter | Qt::AlignVCenter, QString::number(h));
     }
 
     // Axis line and caption
-    p.setPen(QPen(QColor(160, 160, 165), 1));
+    p.setPen(QPen(c.axis, 1));
     p.drawLine(kMarginLeft, baseline, kMarginLeft + plotW, baseline);
 
     QFont captionFont = font();
     captionFont.setPointSize(8);
     p.setFont(captionFont);
-    p.setPen(QColor(170, 170, 175));
+    p.setPen(c.caption);
     p.drawText(kMarginLeft, baseline + hourLabelBand, plotW, kAxisCaptionBand,
                Qt::AlignHCenter | Qt::AlignVCenter, tr("Hour of Day"));
+
+    p.restore();
 }
+
+void HourlyVolumeChart::setExportInfo(const QString& title, const QString& subtitle,
+                                      const QString& fileStem) {
+    exportTitle_ = title;
+    exportSubtitle_ = subtitle;
+    exportFileStem_ = fileStem;
+}
+
+void HourlyVolumeChart::contextMenuEvent(QContextMenuEvent* event) {
+    if (volumes_.size() != 24) return;
+    QMenu menu(this);
+    menu.addAction(tr("Export chart..."), this, &HourlyVolumeChart::exportChart);
+    menu.exec(event->globalPos());
+}
+
+void HourlyVolumeChart::exportChart() {
+    if (volumes_.size() != 24) return;
+    // A fixed page size, so every exported chart has the same shape and two of
+    // them can sit side by side in a report.
+    ScreenshotExporter::exportDrawing(
+        this, tr("Export chart"), exportFileStem_, QSize(640, 360),
+        [this](QPainter& p, const QRect& area) {
+            paintChart(p, area, paperColors(), -1, true);
+        });
+}
+
+namespace {
+
+const HourlyVolumeChart::Colors& screenColors() {
+    static const HourlyVolumeChart::Colors c{
+        QColor(),
+        QColor(255, 255, 255, 30),
+        QColor(150, 150, 155),
+        QColor(235, 235, 240),
+        QColor(120, 120, 126),
+        QColor(220, 220, 226),
+        QColor(160, 160, 165),
+        QColor(170, 170, 175),
+        QColor(235, 235, 240),
+    };
+    return c;
+}
+
+const HourlyVolumeChart::Colors& paperColors() {
+    static const HourlyVolumeChart::Colors c{
+        QColor(Qt::white),
+        QColor(0, 0, 0, 30),
+        QColor(90, 90, 95),
+        QColor(20, 20, 20),
+        QColor(130, 130, 135),
+        QColor(40, 40, 40),
+        QColor(80, 80, 85),
+        QColor(90, 90, 95),
+        QColor(20, 20, 20),
+    };
+    return c;
+}
+
+} // namespace
 
 void HourlyVolumeChart::mouseMoveEvent(QMouseEvent* event) {
     const int hour = hourAt(event->pos().x());

@@ -11,6 +11,7 @@
 #include "map_widget.h"
 #include "timeline_widget.h"
 #include "info_panel.h"
+#include "scenario_panel.h"
 #include "data/network_index.h"
 #include "data/vehicle_index.h"
 #include "parsers/preprocessor.h"
@@ -25,6 +26,9 @@
 #include <cstdint>
 #include <unordered_map>
 #include <vector>
+
+class QDockWidget;
+class QLineEdit;
 
 namespace simvis {
 
@@ -131,6 +135,14 @@ private slots:
 
     // Network link details
     void onNetworkLinkClicked(uint32_t linkId);
+
+    // Scenario selection: Ctrl+click adds a road (both directions) or
+    // removes it when it is already in the list.
+    void onNetworkLinkCtrlClicked(uint32_t linkId);
+
+    // Search box: find a link by its MATSim id, show it like a plain click and
+    // zoom to it.
+    void onFindLink();
 
     // Export
     void onExportPdf();
@@ -292,6 +304,22 @@ private:
 
     // Clear everything that belongs to the scenario being replaced.
     void resetScenarioState();
+
+    // MATSim id string of a link (internal id), or the number if unknown.
+    QString linkOriginalId(uint32_t linkId) const;
+    // A row for the "Selected links" panel.
+    ScenarioPanel::LinkRow scenarioRow(uint32_t linkId) const;
+    void zoomToLink(uint32_t linkId);
+
+    // "Selected links" panel in a dock on the right. Opens on the first
+    // Ctrl+click.
+    ScenarioPanel* scenarioPanel_ = nullptr;
+    QDockWidget* scenarioDock_ = nullptr;
+    QLineEdit* linkSearchEdit_ = nullptr;
+
+    // TAREEK experiment folder name of the loaded run: the folder that holds
+    // the network file, or its parent when that folder is named "output".
+    QString experimentName_;
 
     // Colors mean the same on every map when this is on. Off, each map is
     // scaled to its own peak, which reads one map well but cannot be compared.

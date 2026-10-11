@@ -34,6 +34,9 @@ public:
     // World-units half-width of the route band (scaled with zoom by caller if desired)
     void setHalfWidth(float halfWidth) { halfWidth_ = halfWidth; buffersNeedUpdate_ = true; }
 
+    // Band color, 0..1 per channel. Yellow unless set.
+    void setColor(float r, float g, float b) { colorR_ = r; colorG_ = g; colorB_ = b; }
+
     void render();
 
 private:
@@ -49,6 +52,7 @@ private:
     bool visible_ = false;
     bool buffersNeedUpdate_ = false;
     float halfWidth_ = 6.0f;  // meters (world units)
+    float colorR_ = 1.0f, colorG_ = 0.85f, colorB_ = 0.1f;
 };
 
 } // namespace simvis

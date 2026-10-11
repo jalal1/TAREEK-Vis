@@ -64,6 +64,12 @@ bool NetworkIndex::loadFile(const QString& path) {
         linkIdToIndex_[links_[i].id] = i;
     }
 
+    linksByNodePair_.clear();
+    for (const auto& link : links_) {
+        const uint64_t key = (static_cast<uint64_t>(link.fromNode) << 32) | link.toNode;
+        linksByNodePair_[key].push_back(link.id);
+    }
+
     // Build spatial index
     buildSpatialIndex();
 
@@ -81,6 +87,7 @@ void NetworkIndex::unload() {
     links_.clear();
     nodeIdToIndex_.clear();
     linkIdToIndex_.clear();
+    linksByNodePair_.clear();
     nodeIds_.clear();
     linkIds_.clear();
     spatialGrid_.clear();
@@ -100,6 +107,23 @@ const LinkRecord* NetworkIndex::getLink(uint32_t id) const {
     auto it = linkIdToIndex_.find(id);
     if (it == linkIdToIndex_.end()) return nullptr;
     return &links_[it->second];
+}
+
+std::vector<uint32_t> NetworkIndex::linksBetween(uint32_t from, uint32_t to) const {
+    QMutexLocker locker(&mutex_);
+
+    auto it = linksByNodePair_.find((static_cast<uint64_t>(from) << 32) | to);
+    if (it == linksByNodePair_.end()) return {};
+    return it->second;
+}
+
+uint32_t NetworkIndex::findLinkByOriginalId(const std::string& originalId) const {
+    QMutexLocker locker(&mutex_);
+
+    if (!linkIds_.hasString(originalId)) return UINT32_MAX;
+    const uint32_t id = linkIds_.getId(originalId);
+    // The string table also names ids that may have no record; check.
+    return linkIdToIndex_.count(id) ? id : UINT32_MAX;
 }
 
 void NetworkIndex::buildSpatialIndex() {

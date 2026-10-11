@@ -47,6 +47,7 @@ set(SOURCES
     src/ui/video_settings_dialog.cpp
     src/ui/counts_chart_dialog.cpp
     src/ui/screenshot_exporter.cpp
+    src/ui/scenario_panel.cpp
     third_party/pugixml.cpp
 )
 
@@ -87,6 +88,7 @@ set(HEADERS
     src/ui/video_settings_dialog.h
     src/ui/counts_chart_dialog.h
     src/ui/screenshot_exporter.h
+    src/ui/scenario_panel.h
 )
 
 # Create executable

@@ -26,9 +26,10 @@ static const char* routeFragmentShader = R"(
 in float vAlpha;
 out vec4 FragColor;
 
+uniform vec3 uColor;
+
 void main() {
-    // Yellow route band
-    FragColor = vec4(1.0, 0.85, 0.1, vAlpha);
+    FragColor = vec4(uColor, vAlpha);
 }
 )";
 
@@ -126,6 +127,7 @@ void PersonRouteRenderer::render() {
     glUseProgram(program_);
     GLint mvpLoc = glGetUniformLocation(program_, "uMVP");
     glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, mvp.constData());
+    glUniform3f(glGetUniformLocation(program_, "uColor"), colorR_, colorG_, colorB_);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

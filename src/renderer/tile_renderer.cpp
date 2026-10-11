@@ -1,7 +1,12 @@
 #include "tile_renderer.h"
 #include <QNetworkRequest>
+#include <QNetworkDiskCache>
+#include <QStandardPaths>
+#include <QSet>
 #include <QDebug>
+#include <algorithm>
 #include <cmath>
+#include <utility>
 #include <vector>
 
 namespace simvis {
@@ -32,6 +37,7 @@ void main() {
 TileRenderer::TileRenderer(QObject* parent)
     : QObject(parent)
 {
+    clock_.start();
 }
 
 TileRenderer::~TileRenderer() {
@@ -63,23 +69,46 @@ bool TileRenderer::initialize() {
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
-    // Network manager for tile downloads
+    // Network manager for tile downloads. The disk cache keeps tiles between
+    // runs: without one, PreferCache has nothing to read and every start
+    // downloads the whole view again. The OSM tile policy also asks clients to
+    // cache.
     netManager_ = new QNetworkAccessManager(this);
+    auto* diskCache = new QNetworkDiskCache(netManager_);
+    diskCache->setCacheDirectory(
+        QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/tiles");
+    diskCache->setMaximumCacheSize(300LL * 1024 * 1024);
+    netManager_->setCache(diskCache);
+    // A stalled request would hold a download slot for good.
+    netManager_->setTransferTimeout(15000);
     connect(netManager_, &QNetworkAccessManager::finished,
             this, &TileRenderer::onTileDownloaded);
 
     return true;
 }
 
+void TileRenderer::clearTiles() {
+    for (auto it = tiles_.begin(); it != tiles_.end(); ++it) {
+        glDeleteTextures(1, &it.value().texture);
+    }
+    tiles_.clear();
+    pendingImages_.clear();
+    failures_.clear();
+    // abort() can call onTileDownloaded at once, which edits inFlight_, so
+    // empty it before cancelling.
+    const auto replies = std::exchange(inFlight_, {});
+    for (const auto& reply : replies) {
+        if (reply) {
+            reply->setProperty("cancelled", true);
+            reply->abort();
+        }
+    }
+}
+
 void TileRenderer::cleanup() {
     if (!initialized_) return;
 
-    // Delete all cached textures
-    for (auto it = tileTextures_.begin(); it != tileTextures_.end(); ++it) {
-        glDeleteTextures(1, &it.value());
-    }
-    tileTextures_.clear();
-    tileLru_.clear();
+    clearTiles();
 
     if (vbo_) { glDeleteBuffers(1, &vbo_); vbo_ = 0; }
     if (vao_) { glDeleteVertexArrays(1, &vao_); vao_ = 0; }
@@ -95,16 +124,10 @@ void TileRenderer::setEnabled(bool enabled) {
 void TileRenderer::setTileSource(TileSource source) {
     if (source_ == source) return;
     source_ = source;
+    ++sourceGeneration_;
 
     // Clear cache when switching sources
-    if (initialized_) {
-        for (auto it = tileTextures_.begin(); it != tileTextures_.end(); ++it) {
-            glDeleteTextures(1, &it.value());
-        }
-        tileTextures_.clear();
-        tileLru_.clear();
-        pendingDownloads_.clear();
-    }
+    if (initialized_) clearTiles();
 }
 
 int TileRenderer::calculateZoomLevel() const {
@@ -126,8 +149,32 @@ int TileRenderer::calculateZoomLevel() const {
     return std::clamp(z, 1, 19);
 }
 
+GLuint TileRenderer::useTile(const TileKey& key) {
+    auto it = tiles_.find(key);
+    if (it == tiles_.end()) return 0;
+    it.value().lastUsedFrame = frame_;
+    return it.value().texture;
+}
+
+void TileRenderer::drawQuad(GLuint tex, float x0, float y0, float x1, float y1,
+                            float u0, float v0, float u1, float v1) {
+    // Triangle strip; (x0,y0) is bottom-left on the map, (u0,v0) the top-left
+    // of the image, since tile images have their origin at the top.
+    const float quad[16] = {
+        x0, y0, u0, v1,  // bottom-left
+        x1, y0, u1, v1,  // bottom-right
+        x0, y1, u0, v0,  // top-left
+        x1, y1, u1, v0,  // top-right
+    };
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(quad), quad);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+}
+
 void TileRenderer::render() {
     if (!enabled_ || !initialized_ || !crs_.isValid()) return;
+    ++frame_;
 
     // Upload any pending images (GL context is current during render)
     if (!pendingImages_.isEmpty()) {
@@ -135,8 +182,7 @@ void TileRenderer::render() {
             GLuint tex = uploadTexture(it.value());
             if (tex) {
                 evictOldTiles();
-                tileTextures_.insert(it.key(), tex);
-                tileLru_.push_back(it.key());
+                tiles_.insert(it.key(), CachedTile{tex, frame_});
             }
         }
         pendingImages_.clear();
@@ -154,22 +200,23 @@ void TileRenderer::render() {
     if (lonMin > lonMax) std::swap(lonMin, lonMax);
     if (latMin > latMax) std::swap(latMin, latMax);
 
+    // Get tile range covering the viewport, with a 1-tile margin. A very large
+    // viewport (a high-resolution export) would need too many tiles at its own
+    // zoom; step down until the count is sane rather than drawing nothing.
     int z = calculateZoomLevel();
-
-    // Get tile range covering the viewport
-    auto [txMin, tyMax] = crs::lonLatToTile(lonMin, latMin, z); // lat min -> tile y max
-    auto [txMax, tyMin] = crs::lonLatToTile(lonMax, latMax, z);
-
-    // Clamp and add 1-tile margin
-    int n = 1 << z;
-    txMin = std::max(0, txMin - 1);
-    tyMin = std::max(0, tyMin - 1);
-    txMax = std::min(n - 1, txMax + 1);
-    tyMax = std::min(n - 1, tyMax + 1);
-
-    // Limit tiles per frame to avoid stalling
-    int tileCount = (txMax - txMin + 1) * (tyMax - tyMin + 1);
-    if (tileCount > 100) return; // too many tiles, zoom mismatch
+    int txMin, txMax, tyMin, tyMax;
+    for (;;) {
+        auto [ax, ayMax] = crs::lonLatToTile(lonMin, latMin, z); // lat min -> tile y max
+        auto [bx, byMin] = crs::lonLatToTile(lonMax, latMax, z);
+        const int n = 1 << z;
+        txMin = std::max(0, ax - 1);
+        tyMin = std::max(0, byMin - 1);
+        txMax = std::min(n - 1, bx + 1);
+        tyMax = std::min(n - 1, ayMax + 1);
+        const int tileCount = (txMax - txMin + 1) * (tyMax - tyMin + 1);
+        if (tileCount <= 100 || z <= 1) break;
+        --z;
+    }
 
     // Set up GL state
     QMatrix4x4 mvp = projectionMatrix_ * viewMatrix_;
@@ -211,60 +258,128 @@ void TileRenderer::render() {
         tileEdgeY[j] = ey;
     }
 
+    // Tile coordinates of the view center, for download order.
+    auto [cxTile, cyTile] = crs::lonLatToTile((lonMin + lonMax) * 0.5,
+                                              (latMin + latMax) * 0.5, z);
+
+    std::vector<WantedTile> wanted;
+    // Coarse tiles asked for this frame, so one is not queued once per child.
+    QSet<TileKey> wantedCoarse;
+
     for (int ty = tyMin; ty <= tyMax; ++ty) {
         int jRow = ty - tyMin;
         for (int tx = txMin; tx <= txMax; ++tx) {
             int iCol = tx - txMin;
             TileKey key{ tx, ty, z };
 
-            // Get or fetch texture
-            auto it = tileTextures_.find(key);
-            if (it == tileTextures_.end()) {
-                fetchTile(key);
-                continue; // skip rendering until downloaded
-            }
-
-            GLuint tex = it.value();
-
             // Tile edges from pre-computed grid (no per-tile CRS conversion = no seams)
             // tileEdgeY[jRow] = top (higher lat = higher northing)
             // tileEdgeY[jRow+1] = bottom (lower lat = lower northing)
-            float x0 = (float)tileEdgeX[iCol];
-            float x1 = (float)tileEdgeX[iCol + 1];
-            float yTop = (float)tileEdgeY[jRow];       // top of tile (high lat)
-            float yBot = (float)tileEdgeY[jRow + 1];   // bottom of tile (low lat)
+            const float x0 = (float)tileEdgeX[iCol];
+            const float x1 = (float)tileEdgeX[iCol + 1];
+            const float yTop = (float)tileEdgeY[jRow];
+            const float yBot = (float)tileEdgeY[jRow + 1];
 
-            // Build quad: 4 vertices [x, y, u, v] as triangle strip
-            // OSM tile images have origin at top-left, so v=0 is top, v=1 is bottom
-            float quad[16] = {
-                x0, yBot, 0.0f, 1.0f,  // bottom-left  (v=1 = bottom of image)
-                x1, yBot, 1.0f, 1.0f,  // bottom-right
-                x0, yTop, 0.0f, 0.0f,  // top-left     (v=0 = top of image)
-                x1, yTop, 1.0f, 0.0f,  // top-right
-            };
+            if (GLuint tex = useTile(key)) {
+                drawQuad(tex, x0, yBot, x1, yTop, 0.0f, 0.0f, 1.0f, 1.0f);
+                continue;
+            }
 
-            glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(quad), quad);
+            const double dx = tx + 0.5 - cxTile;
+            const double dy = ty + 0.5 - cyTile;
+            wanted.push_back({key, dx * dx + dy * dy});
 
-            glBindTexture(GL_TEXTURE_2D, tex);
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+            // Not here yet: stand in with the nearest coarser tile we have,
+            // cropped to this tile's part of it. Blurry for a moment, but not
+            // a black hole.
+            bool covered = false;
+            for (int d = 1; d <= 6 && z - d >= 0; ++d) {
+                TileKey parent{ tx >> d, ty >> d, z - d };
+                if (GLuint tex = useTile(parent)) {
+                    const float s = 1.0f / static_cast<float>(1 << d);
+                    const float u0 = (tx & ((1 << d) - 1)) * s;
+                    const float v0 = (ty & ((1 << d) - 1)) * s;
+                    drawQuad(tex, x0, yBot, x1, yTop, u0, v0, u0 + s, v0 + s);
+                    covered = true;
+                    break;
+                }
+            }
+            // Nothing coarse on hand (first load, or a jump far away): ask for
+            // the tile three levels up first. It is one small download that
+            // covers 64 of these tiles.
+            if (!covered && z >= 4) {
+                TileKey coarse{ tx >> 3, ty >> 3, z - 3 };
+                if (!wantedCoarse.contains(coarse)) {
+                    wantedCoarse.insert(coarse);
+                    wanted.push_back({coarse, -1.0});
+                }
+            }
+
+            // After zooming out, the finer tiles of the last view are still
+            // cached and are sharper than any parent; draw what we have.
+            if (z + 1 <= 19) {
+                const float xm = 0.5f * (x0 + x1);
+                const float ym = 0.5f * (yTop + yBot);
+                for (int j = 0; j < 2; ++j) {
+                    for (int i = 0; i < 2; ++i) {
+                        GLuint tex = useTile(TileKey{ 2 * tx + i, 2 * ty + j, z + 1 });
+                        if (!tex) continue;
+                        const float cx0 = i == 0 ? x0 : xm;
+                        const float cx1 = i == 0 ? xm : x1;
+                        const float cyTop = j == 0 ? yTop : ym;
+                        const float cyBot = j == 0 ? ym : yBot;
+                        drawQuad(tex, cx0, cyBot, cx1, cyTop, 0.0f, 0.0f, 1.0f, 1.0f);
+                    }
+                }
+            }
         }
     }
 
     glBindVertexArray(0);
     glDisable(GL_BLEND);
     glUseProgram(0);
+
+    scheduleDownloads(wanted);
 }
 
-void TileRenderer::fetchTile(const TileKey& key) {
-    if (pendingDownloads_.contains(key)) return;
-    if (pendingDownloads_.size() >= 8) return;  // limit concurrent downloads
+void TileRenderer::scheduleDownloads(std::vector<WantedTile>& wanted) {
+    QSet<TileKey> wantedKeys;
+    for (const auto& w : wanted) wantedKeys.insert(w.key);
 
-    pendingDownloads_.insert(key);
+    // Cancel downloads the view has moved away from, so they do not hold the
+    // slots the new view needs. A tile already decoded is kept.
+    for (auto it = inFlight_.begin(); it != inFlight_.end();) {
+        if (!wantedKeys.contains(it.key())) {
+            QPointer<QNetworkReply> reply = it.value();
+            it = inFlight_.erase(it);
+            if (reply) {
+                reply->setProperty("cancelled", true);
+                reply->abort();
+            }
+        } else {
+            ++it;
+        }
+    }
 
+    std::sort(wanted.begin(), wanted.end(),
+              [](const WantedTile& a, const WantedTile& b) { return a.priority < b.priority; });
+
+    const qint64 now = clock_.elapsed();
+    for (const auto& w : wanted) {
+        if (inFlight_.size() >= MAX_IN_FLIGHT) break;
+        if (inFlight_.contains(w.key) || pendingImages_.contains(w.key)) continue;
+        auto f = failures_.constFind(w.key);
+        if (f != failures_.constEnd() && now < f->retryAtMs) continue;
+        startDownload(w.key);
+    }
+}
+
+void TileRenderer::startDownload(const TileKey& key) {
     QNetworkRequest request;
     request.setUrl(QUrl(tileUrl(key)));
-    request.setRawHeader("User-Agent", "TAREEK-Vis/1.0");
+    // The OSM tile usage policy requires a User-Agent that identifies the app
+    request.setRawHeader("User-Agent",
+                         "TAREEK-Vis/1.0 (+https://github.com/jalal1/TAREEK-Vis)");
     request.setAttribute(QNetworkRequest::CacheLoadControlAttribute,
                          QNetworkRequest::PreferCache);
 
@@ -272,6 +387,8 @@ void TileRenderer::fetchTile(const TileKey& key) {
     reply->setProperty("tileX", key.x);
     reply->setProperty("tileY", key.y);
     reply->setProperty("tileZ", key.z);
+    reply->setProperty("tileGen", sourceGeneration_);
+    inFlight_.insert(key, reply);
 }
 
 void TileRenderer::onTileDownloaded(QNetworkReply* reply) {
@@ -282,18 +399,41 @@ void TileRenderer::onTileDownloaded(QNetworkReply* reply) {
     key.y = reply->property("tileY").toInt();
     key.z = reply->property("tileZ").toInt();
 
-    pendingDownloads_.remove(key);
+    // Only forget the slot if it is still this reply's: a cancelled request
+    // may finish after a new one for the same tile has started.
+    auto it = inFlight_.find(key);
+    if (it != inFlight_.end() && it.value() == reply) inFlight_.erase(it);
+
+    // A tile of the source we just switched away from.
+    if (reply->property("tileGen").toInt() != sourceGeneration_) return;
+
+    // We cancelled it because it left the view. Qt reports a transfer
+    // time-out with the same error; that one counts as a failure below.
+    if (reply->error() == QNetworkReply::OperationCanceledError &&
+        reply->property("cancelled").toBool()) {
+        emit tileLoaded();  // let the next frame fill the freed slot
+        return;
+    }
 
     if (reply->error() != QNetworkReply::NoError) {
         qDebug() << "Tile download failed:" << reply->url() << reply->errorString();
+        // Wait 2 s, then 4, 8 ... up to a minute before asking again.
+        Failure& f = failures_[key];
+        f.attempts = std::min(f.attempts + 1, 5);
+        f.retryAtMs = clock_.elapsed() + (1000LL << f.attempts);
+        emit tileLoaded();
         return;
     }
 
     QImage image;
     if (!image.loadFromData(reply->readAll())) {
         qDebug() << "Failed to decode tile image:" << reply->url();
+        Failure& f = failures_[key];
+        f.attempts = 5;
+        f.retryAtMs = clock_.elapsed() + 60000;
         return;
     }
+    failures_.remove(key);
 
     // Store image for GL upload during next render() when context is current
     // Do NOT mirror - the UV coords already account for OpenGL's bottom-up convention
@@ -318,22 +458,27 @@ GLuint TileRenderer::uploadTexture(const QImage& image) {
 }
 
 void TileRenderer::evictOldTiles() {
-    while (tileTextures_.size() >= MAX_CACHED_TILES && !tileLru_.empty()) {
-        TileKey oldest = tileLru_.front();
-        tileLru_.pop_front();
-        auto it = tileTextures_.find(oldest);
-        if (it != tileTextures_.end()) {
-            glDeleteTextures(1, &it.value());
-            tileTextures_.erase(it);
+    // Drop the tile drawn longest ago. Tiles drawn in the last frame are on
+    // screen now and are never dropped; the cache grows past its limit rather
+    // than make a visible tile flash.
+    while (tiles_.size() >= MAX_CACHED_TILES) {
+        auto oldest = tiles_.end();
+        for (auto it = tiles_.begin(); it != tiles_.end(); ++it) {
+            if (oldest == tiles_.end() || it.value().lastUsedFrame < oldest.value().lastUsedFrame)
+                oldest = it;
         }
+        if (oldest == tiles_.end() || oldest.value().lastUsedFrame + 1 >= frame_) return;
+        glDeleteTextures(1, &oldest.value().texture);
+        tiles_.erase(oldest);
     }
 }
 
 QString TileRenderer::tileUrl(const TileKey& key) const {
     switch (source_) {
     case TileSource::OpenStreetMap:
-        // Carto Voyager tiles: English labels by default, clean style
-        return QString("https://basemaps.cartocdn.com/rastertiles/voyager/%1/%2/%3.png")
+        // OSM Standard tiles: free, no API key. Carto now serves an
+        // "API key required" placeholder to clients without a key.
+        return QString("https://tile.openstreetmap.org/%1/%2/%3.png")
             .arg(key.z).arg(key.x).arg(key.y);
     case TileSource::Satellite:
         return QString("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/%1/%2/%3")

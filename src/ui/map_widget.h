@@ -131,8 +131,16 @@ public:
     // transit line, activity markers). Used when a new selection is made.
     void clearAllHighlights();
 
+    // Links picked for a scenario, drawn in red under the yellow link
+    // highlight. Not touched by clearAllHighlights. Empty clears it.
+    void setSelectedLinks(const std::vector<uint32_t>& linkIds);
+
     // Pan to world coordinates
     void panTo(float worldX, float worldY);
+
+    // Center on a world box and zoom so it fills the view, with `margin` times
+    // its size of space around it.
+    void zoomToBounds(const BoundingBox& box, double margin = 1.0);
 
     // Video recording support
     void setVideoRecorder(VideoRecorder* recorder);
@@ -159,6 +167,7 @@ signals:
     void transitRouteClicked(uint32_t lineId);         // transit line ID
     void countLinkClicked(uint32_t linkId);            // count link ID
     void networkLinkClicked(uint32_t linkId);          // network link internal ID
+    void networkLinkCtrlClicked(uint32_t linkId);      // Ctrl+click: scenario selection
 
 protected:
     void initializeGL() override;
@@ -182,6 +191,11 @@ private:
     // rectangle with no indication of what to do next
     void drawEmptyState(QPainter& painter);
 
+    // Band half-widths in screen pixels. The selection is wider, so a selected
+    // link that is also the inspected one shows red edges around the yellow.
+    static constexpr double kRouteHalfWidthPx = 5.0;
+    static constexpr double kSelectionHalfWidthPx = 7.0;
+
     // Nearest network link to a world point within radius (UINT32_MAX = none)
     uint32_t findNetworkLinkAt(double worldX, double worldY, double radius) const;
     QPointF screenToWorld(const QPoint& screenPos) const;
@@ -193,6 +207,7 @@ private:
     std::unique_ptr<TransitRouteRenderer> transitRouteRenderer_;
     std::unique_ptr<CountsRenderer> countsRenderer_;
     std::unique_ptr<PersonRouteRenderer> personRouteRenderer_;
+    std::unique_ptr<PersonRouteRenderer> selectionRenderer_;  // red scenario links
     std::unique_ptr<HeatmapRenderer> heatmapRenderer_;
     std::unique_ptr<HaloRenderer> vehicleHaloRenderer_;  // cyan ring on tracked vehicle
     std::unique_ptr<HaloRenderer> countsHaloRenderer_;   // cyan rings on count stations

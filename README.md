@@ -54,6 +54,11 @@ here once available, along with the official ACM DOI link.
 - Animate vehicle movements from events files
 - Click a vehicle to track it: driver, per-day trip list (departure/arrival
   activity, times, mode per leg), transit line/route and live passenger counts
+- Click a road link to see its details and its hourly traffic volume chart
+- Find a link by its MATSim link ID (Ctrl+F)
+- Export the hourly volume chart as PNG or PDF
+- What-if scenarios: select road links to close and export a scenario file
+  for TAREEK
 - Time-based playback with variable speed control
 - Pan and zoom navigation
 - Memory-efficient handling of large datasets (2GB+ events)
@@ -172,10 +177,63 @@ git push origin v1.0.1
 
 You can also launch with a folder argument: `TAREEK-Vis <folder>`
 
+### Road Links and Hourly Volume
+
+1. Click a road on the map. The info panel shows the link details and a chart
+   of the vehicles on the link in each hour of the day.
+2. To find a link by its ID, press Ctrl+F, type the MATSim link ID and press
+   Enter. The map zooms to the link and opens its chart.
+3. To save the chart, click **Export chart...** under the chart, or right-click
+   the chart. Give the file name the extension `.png` or `.pdf`. The title of
+   the exported chart shows the link ID and the experiment folder name.
+
+When you open a different experiment folder, the link you looked at opens
+again in the new run (TAREEK-Vis finds it by its ID). Use this to compare the
+chart of the same link in two runs, for example a baseline and a scenario.
+
+### What-If Scenarios (Road Closures)
+
+TAREEK-Vis makes the scenario file. TAREEK then runs the baseline again with
+the selected links closed to cars.
+
+1. Open the output folder of the baseline run.
+2. Ctrl+click a road to add it to the **Selected links** panel. TAREEK-Vis adds
+   both directions of the road. Selected links show in red on the map.
+   Ctrl+click the road again to remove it.
+3. In the panel, uncheck a row to keep that link out of the file (for example,
+   to close only one direction). To remove rows, select them and click
+   **Remove** (or press Delete).
+4. Type a **Name** (letters, digits, `_` and `-` only) and, if you want, a
+   **Description**.
+5. Make sure that **Base run** shows the name of the baseline experiment
+   folder. If you opened `experiments/<id>/output`, it shows `<id>`.
+6. Click **Export scenario file...**. If the button is off, the panel tells you
+   why.
+
+The file contains only the checked links:
+
+```json
+{
+  "name": "hwy15_bridge_closure",
+  "description": "Full closure of the Hwy 15 bridge, both directions",
+  "base_experiment": "experiment_20261012_101500",
+  "closures": [
+    { "type": "close", "link_ids": ["48211", "48212"] }
+  ]
+}
+```
+
+Run it in TAREEK:
+
+```bash
+python run_scenario.py run --base <baseline folder> --scenario hwy15_bridge_closure.json
+```
+
 ### Keyboard Shortcuts
 
 - **Space**: Play/Pause
 - **F**: Fit network to view
+- **Ctrl+F**: Find a link by its ID
 - **+/-**: Zoom in/out
 - **Home**: Go to start
 - **End**: Go to end
@@ -184,6 +242,9 @@ You can also launch with a folder argument: `TAREEK-Vis <folder>`
 
 - **Left drag**: Pan
 - **Scroll wheel**: Zoom
+- **Click**: Show a vehicle, stop, route or road link in the info panel
+- **Ctrl+click**: Add a road to the scenario selection, or remove it
+- **Right-click the hourly chart**: Export the chart
 
 ## Input File Format
 
@@ -249,9 +310,14 @@ requires attribution when its imagery is shown, reproduced, or published:
 
 | Layer | Provider | Required attribution |
 |-------|----------|----------------------|
-| OpenStreetMap | [CARTO](https://carto.com/attributions) Voyager basemap, built on OpenStreetMap data | © OpenStreetMap contributors, © CARTO |
+| OpenStreetMap | [OpenStreetMap](https://www.openstreetmap.org/copyright) Standard tile layer | © OpenStreetMap contributors |
 | Satellite | [Esri World Imagery](https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9) (ArcGIS Online) | Esri, Maxar, Earthstar Geographics, and the GIS User Community |
 | Topographic | [OpenTopoMap](https://opentopomap.org/) | © OpenStreetMap contributors, © OpenTopoMap (CC-BY-SA) |
+
+TAREEK-Vis keeps downloaded tiles in a disk cache (up to 300 MB, in
+`%LOCALAPPDATA%\TAREEK-Vis\cache\tiles` on Windows), so an area you saw
+before loads fast, also after a restart. Until a tile downloads, a blurred
+tile from a different zoom level shows in its place.
 
 If you publish figures, screenshots, or videos produced with a background map
 enabled, include the corresponding attribution in the caption or credits.

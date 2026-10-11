@@ -24,6 +24,7 @@ MapWidget::MapWidget(QWidget* parent)
 
 MapWidget::~MapWidget() {
     makeCurrent();
+    selectionRenderer_.reset();
     countsRenderer_.reset();
     transitRouteRenderer_.reset();
     networkRenderer_.reset();
@@ -373,7 +374,7 @@ void MapWidget::setPersonRoute(const std::vector<PersonRouteRenderer::Segment>& 
         personRouteRenderer_->setViewMatrix(viewMatrix_);
         personRouteRenderer_->setProjectionMatrix(projectionMatrix_);
         personRouteRenderer_->setHalfWidth(
-            static_cast<float>(5.0 / std::max(zoom_, 1e-9)));
+            static_cast<float>(kRouteHalfWidthPx / std::max(zoom_, 1e-9)));
     }
     update();
 }
@@ -500,6 +501,43 @@ void MapWidget::clearAllHighlights() {
     update();
 }
 
+void MapWidget::setSelectedLinks(const std::vector<uint32_t>& linkIds) {
+    if (!selectionRenderer_) return;
+    std::vector<PersonRouteRenderer::Segment> segs;
+    if (networkIndex_) {
+        segs.reserve(linkIds.size());
+        for (uint32_t id : linkIds) {
+            const LinkRecord* link = networkIndex_->getLink(id);
+            if (!link) continue;
+            const NodeRecord* a = networkIndex_->getNode(link->fromNode);
+            const NodeRecord* b = networkIndex_->getNode(link->toNode);
+            if (!a || !b) continue;
+            segs.push_back({a->x, a->y, b->x, b->y, false});
+        }
+    }
+    selectionRenderer_->setRoute(segs);
+    selectionRenderer_->setViewMatrix(viewMatrix_);
+    selectionRenderer_->setProjectionMatrix(projectionMatrix_);
+    selectionRenderer_->setHalfWidth(
+        static_cast<float>(kSelectionHalfWidthPx / std::max(zoom_, 1e-9)));
+    selectionRenderer_->setVisible(!segs.empty());
+    update();
+}
+
+void MapWidget::zoomToBounds(const BoundingBox& box, double margin) {
+    if (width() <= 0 || height() <= 0) return;
+    const Point2D c = box.center();
+    centerX_ = c.x;
+    centerY_ = c.y;
+    // A short link would zoom in too far; keep at least ~200 m in view.
+    const double w = std::max(box.width() * (1.0 + margin), 200.0);
+    const double h = std::max(box.height() * (1.0 + margin), 200.0);
+    zoom_ = std::clamp(std::min(width() / w, height() / h), minZoom_, maxZoom_);
+    updateView();
+    emit viewChanged();
+    update();
+}
+
 void MapWidget::panTo(float worldX, float worldY) {
     centerX_ = worldX;
     centerY_ = worldY;
@@ -536,6 +574,7 @@ void MapWidget::initializeGL() {
 
     countsRenderer_ = std::make_unique<CountsRenderer>();
     personRouteRenderer_ = std::make_unique<PersonRouteRenderer>();
+    selectionRenderer_ = std::make_unique<PersonRouteRenderer>();
     heatmapRenderer_ = std::make_unique<HeatmapRenderer>();
     vehicleHaloRenderer_ = std::make_unique<HaloRenderer>();
     countsHaloRenderer_ = std::make_unique<HaloRenderer>();
@@ -548,6 +587,10 @@ void MapWidget::initializeGL() {
     if (!personRouteRenderer_->initialize()) {
         LOG_WARN("Failed to initialize person route renderer");
     }
+    if (!selectionRenderer_->initialize()) {
+        LOG_WARN("Failed to initialize selection renderer");
+    }
+    selectionRenderer_->setColor(0.95f, 0.2f, 0.25f);
     if (!vehicleHaloRenderer_->initialize()) {
         LOG_WARN("Failed to initialize vehicle halo renderer");
     }
@@ -601,6 +644,9 @@ void MapWidget::resizeGL(int w, int h) {
     if (personRouteRenderer_) {
         personRouteRenderer_->setViewportSize(w, h);
     }
+    if (selectionRenderer_) {
+        selectionRenderer_->setViewportSize(w, h);
+    }
 }
 
 void MapWidget::paintGL() {
@@ -635,6 +681,11 @@ void MapWidget::paintGL() {
         // Render transit routes and stops (middle layer, above network)
         if (transitRouteRenderer_) {
             transitRouteRenderer_->render();
+        }
+
+        // Scenario selection, under the yellow inspected-link band
+        if (selectionRenderer_) {
+            selectionRenderer_->render();
         }
 
         // Person full-day route overlay (above routes, below vehicles)
@@ -775,7 +826,12 @@ void MapWidget::updateProjection() {
         // Keep the route band a constant ~5px on screen regardless of zoom so
         // it stays clearly visible above other layers at any zoom level
         personRouteRenderer_->setHalfWidth(
-            static_cast<float>(5.0 / std::max(zoom_, 1e-9)));
+            static_cast<float>(kRouteHalfWidthPx / std::max(zoom_, 1e-9)));
+    }
+    if (selectionRenderer_) {
+        selectionRenderer_->setProjectionMatrix(projectionMatrix_);
+        selectionRenderer_->setHalfWidth(
+            static_cast<float>(kSelectionHalfWidthPx / std::max(zoom_, 1e-9)));
     }
     if (heatmapRenderer_) {
         heatmapRenderer_->setProjectionMatrix(projectionMatrix_);
@@ -808,6 +864,9 @@ void MapWidget::updateView() {
     if (personRouteRenderer_) {
         personRouteRenderer_->setViewMatrix(viewMatrix_);
     }
+    if (selectionRenderer_) {
+        selectionRenderer_->setViewMatrix(viewMatrix_);
+    }
     if (heatmapRenderer_) {
         heatmapRenderer_->setViewMatrix(viewMatrix_);
     }
@@ -836,6 +895,21 @@ void MapWidget::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
         QPointF worldPos = screenToWorld(event->pos());
         double hitRadius = 20.0 / zoom_;
+
+        // Ctrl+click picks road links for a scenario. Only links are tested,
+        // so a car, stop or count station near the road does not get in the
+        // way. A miss pans as usual.
+        if ((event->modifiers() & Qt::ControlModifier) && networkIndex_) {
+            uint32_t linkId = findNetworkLinkAt(worldPos.x(), worldPos.y(), hitRadius);
+            if (linkId != 0xFFFFFFFFu) {
+                emit networkLinkCtrlClicked(linkId);
+                return;
+            }
+            isDragging_ = true;
+            lastMousePos_ = event->pos();
+            setCursor(Qt::ClosedHandCursor);
+            return;
+        }
 
         // Check if clicking on a vehicle first
         if (showVehicles_ && vehicleRenderer_) {
@@ -1083,6 +1157,7 @@ QImage MapWidget::renderToImage(int scaleFactor) {
         if (transitRouteRenderer_) { transitRouteRenderer_->setProjectionMatrix(proj); transitRouteRenderer_->setViewportSize(vpW, vpH); }
         if (countsRenderer_)       { countsRenderer_->setProjectionMatrix(proj);       countsRenderer_->setViewportSize(vpW, vpH); }
         if (personRouteRenderer_)  { personRouteRenderer_->setProjectionMatrix(proj);  personRouteRenderer_->setViewportSize(vpW, vpH); }
+        if (selectionRenderer_)    { selectionRenderer_->setProjectionMatrix(proj);    selectionRenderer_->setViewportSize(vpW, vpH); }
         if (vehicleHaloRenderer_)  { vehicleHaloRenderer_->setProjectionMatrix(proj);  vehicleHaloRenderer_->setViewportSize(vpW, vpH); }
         if (countsHaloRenderer_)   { countsHaloRenderer_->setProjectionMatrix(proj);   countsHaloRenderer_->setViewportSize(vpW, vpH); }
         if (heatmapRenderer_)      { heatmapRenderer_->setProjectionMatrix(proj);      heatmapRenderer_->setViewportSize(vpW, vpH); }
@@ -1115,6 +1190,7 @@ QImage MapWidget::renderToImage(int scaleFactor) {
     if (countsRenderer_)       countsRenderer_->render();
     if (countsHaloRenderer_)   countsHaloRenderer_->render();
     if (transitRouteRenderer_) transitRouteRenderer_->render();
+    if (selectionRenderer_)    selectionRenderer_->render();
     if (personRouteRenderer_)  personRouteRenderer_->render();
     if (vehicleHaloRenderer_)  vehicleHaloRenderer_->render();
     if (showVehicles_ && vehicleRenderer_) vehicleRenderer_->render();

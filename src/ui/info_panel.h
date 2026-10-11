@@ -73,6 +73,8 @@ public:
         // countsScaleFactor the user supplied with the counts file, or 0 when
         // no counts are loaded and the sample rate is therefore unknown.
         double volumeScaleFactor = 0.0;
+        // Name of the experiment folder, shown on an exported chart.
+        QString experimentName;
     };
     void showLinkInfo(const LinkInfo& info);
 

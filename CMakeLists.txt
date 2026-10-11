@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(TAREEK-Vis VERSION 1.2.0 LANGUAGES CXX)
+project(TAREEK-Vis VERSION 1.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -47,6 +47,7 @@ set(SOURCES
     src/ui/video_settings_dialog.cpp
     src/ui/counts_chart_dialog.cpp
     src/ui/screenshot_exporter.cpp
+    src/ui/scenario_panel.cpp
     third_party/pugixml.cpp
 )
 
@@ -87,6 +88,7 @@ set(HEADERS
     src/ui/video_settings_dialog.h
     src/ui/counts_chart_dialog.h
     src/ui/screenshot_exporter.h
+    src/ui/scenario_panel.h
 )
 
 # Create executable

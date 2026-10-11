@@ -43,6 +43,13 @@ public:
     const StringInterner& nodeIds() const { return nodeIds_; }
     const StringInterner& linkIds() const { return linkIds_; }
 
+    // Every link that runs from node `from` to node `to` (internal ids). More
+    // than one when the network has parallel links. Empty when there is none.
+    std::vector<uint32_t> linksBetween(uint32_t from, uint32_t to) const;
+
+    // Internal id of the link with this MATSim id string, or UINT32_MAX.
+    uint32_t findLinkByOriginalId(const std::string& originalId) const;
+
     // Stats
     size_t nodeCount() const { return nodes_.size(); }
     size_t linkCount() const { return links_.size(); }
@@ -68,6 +75,11 @@ private:
 
     StringInterner nodeIds_;
     StringInterner linkIds_;
+
+    // (fromNode << 32 | toNode) -> link ids. The two directions of a road are
+    // drawn on top of each other, so a click cannot tell them apart; this is
+    // how the other direction is found.
+    std::unordered_map<uint64_t, std::vector<uint32_t>> linksByNodePair_;
 
     // Simple grid-based spatial index
     struct SpatialCell {

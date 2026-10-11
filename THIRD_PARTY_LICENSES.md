@@ -89,16 +89,16 @@ provider's own terms, which may limit commercial or high-volume use.
 
 ---
 
-## CARTO Basemaps ("OpenStreetMap" layer)
+## OpenStreetMap Standard tiles ("OpenStreetMap" layer)
 
-- **Endpoint**: `https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png`
-- **Provider**: CARTO (Voyager basemap style, rendered from OpenStreetMap data)
+- **Endpoint**: `https://tile.openstreetmap.org/{z}/{x}/{y}.png`
+- **Provider**: OpenStreetMap Foundation (Standard tile layer)
 - **Underlying data**: OpenStreetMap, licensed under the
   [Open Database License (ODbL)](https://www.openstreetmap.org/copyright)
-- **Basemap styles**: BSD 3-Clause / CC-BY 4.0
-  (https://github.com/CartoDB/basemap-styles)
-- **Terms**: https://carto.com/legal/basemap-terms
-- **Required attribution**: © OpenStreetMap contributors, © CARTO
+- **Terms**: https://operations.osmfoundation.org/policies/tiles/
+  (no API key; the client must send an identifying User-Agent and must not
+  bulk-download tiles)
+- **Required attribution**: © OpenStreetMap contributors
 
 ---
 

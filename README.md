@@ -249,7 +249,7 @@ requires attribution when its imagery is shown, reproduced, or published:
 
 | Layer | Provider | Required attribution |
 |-------|----------|----------------------|
-| OpenStreetMap | [CARTO](https://carto.com/attributions) Voyager basemap, built on OpenStreetMap data | © OpenStreetMap contributors, © CARTO |
+| OpenStreetMap | [OpenStreetMap](https://www.openstreetmap.org/copyright) Standard tile layer | © OpenStreetMap contributors |
 | Satellite | [Esri World Imagery](https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9) (ArcGIS Online) | Esri, Maxar, Earthstar Geographics, and the GIS User Community |
 | Topographic | [OpenTopoMap](https://opentopomap.org/) | © OpenStreetMap contributors, © OpenTopoMap (CC-BY-SA) |
 

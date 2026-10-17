@@ -1,5 +1,6 @@
 #include "info_panel.h"
 #include "panel_style.h"
+#include "elided_label.h"
 #include "hourly_volume_chart.h"
 #include <QScrollBar>
 #include <QHBoxLayout>
@@ -10,6 +11,15 @@
 #include <cmath>
 
 namespace simvis {
+
+// A word-wrapped label must not set the panel width either: one long word
+// without spaces (a long ID) would otherwise push the panel content past the
+// right edge. Keep the height-for-width flag that word wrap set.
+static void letWrappedLabelShrink(QLabel* label) {
+    QSizePolicy sp = label->sizePolicy();
+    sp.setHorizontalPolicy(QSizePolicy::Ignored);
+    label->setSizePolicy(sp);
+}
 
 InfoPanel::InfoPanel(QWidget* parent)
     : QWidget(parent)
@@ -78,6 +88,7 @@ QLabel* InfoPanel::addHeader(const QString& text) {
     auto* label = new QLabel(text, contentWidget_);
     label->setStyleSheet("font-weight: bold; font-size: 13pt; margin-bottom: 4px;");
     label->setWordWrap(true);
+    letWrappedLabelShrink(label);
     // Insert before the trailing stretch
     contentLayout_->insertWidget(contentLayout_->count() - 1, label);
     return label;
@@ -87,6 +98,7 @@ QLabel* InfoPanel::addBody(const QString& text) {
     auto* label = new QLabel(text, contentWidget_);
     label->setStyleSheet("font-size: 11pt; padding-left: 8px;");
     label->setWordWrap(true);
+    letWrappedLabelShrink(label);
     label->setTextInteractionFlags(Qt::TextSelectableByMouse);
     contentLayout_->insertWidget(contentLayout_->count() - 1, label);
     return label;
@@ -96,6 +108,7 @@ QLabel* InfoPanel::addCaption(const QString& text) {
     auto* label = new QLabel(text, contentWidget_);
     label->setStyleSheet("color: black; padding-left: 8px; padding-right: 8px;");
     label->setWordWrap(true);
+    letWrappedLabelShrink(label);
     contentLayout_->insertWidget(contentLayout_->count() - 1, label);
     return label;
 }
@@ -121,7 +134,7 @@ QFrame* InfoPanel::addDivider() {
 
 QLabel* InfoPanel::addClickableItem(const QString& text, std::function<void()> onClick) {
     // Card-style clickable list item (shared panel style; hover tints accent)
-    auto* button = new QPushButton(text, contentWidget_);
+    auto* button = new ElidedButton(text, contentWidget_);
     button->setCursor(Qt::PointingHandCursor);
     button->setStyleSheet(QString(
         "QPushButton { text-align: left; padding: 6px 10px; font-size: 11pt; "
@@ -243,7 +256,7 @@ void InfoPanel::showVehicleInfo(const VehicleInfo& info) {
             grid->setColumnStretch(1, 0);
             grid->setColumnStretch(2, 1);
 
-            auto* fromLabel = new QLabel(
+            auto* fromLabel = new ElidedLabel(
                 QString("%1 %2").arg(actIcon(trip.fromAct), from), card);
             fromLabel->setStyleSheet(panelstyle::cardTitleStyle(selected));
             grid->addWidget(fromLabel, 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
@@ -254,7 +267,7 @@ void InfoPanel::showVehicleInfo(const VehicleInfo& info) {
             modePill->setStyleSheet(panelstyle::pillStyle(pillAccent));
             grid->addWidget(modePill, 0, 1, Qt::AlignHCenter | Qt::AlignVCenter);
 
-            auto* toLabel = new QLabel(
+            auto* toLabel = new ElidedLabel(
                 QString("%1 %2").arg(actIcon(trip.toAct), to), card);
             toLabel->setStyleSheet(panelstyle::cardTitleStyle(selected));
             grid->addWidget(toLabel, 0, 2, Qt::AlignRight | Qt::AlignVCenter);
@@ -327,7 +340,7 @@ void InfoPanel::showLinkInfo(const LinkInfo& info) {
     auto addRow = [&](const QString& key, const QString& value) {
         auto* k = new QLabel(key, card);
         k->setStyleSheet("color: gray; background: transparent; border: none;");
-        auto* v = new QLabel(value, card);
+        auto* v = new ElidedLabel(value, card);
         v->setStyleSheet("font-weight: bold; background: transparent; border: none;");
         v->setTextInteractionFlags(Qt::TextSelectableByMouse);
         v->setAlignment(Qt::AlignRight);
@@ -368,7 +381,7 @@ void InfoPanel::showLinkInfo(const LinkInfo& info) {
         auto kv = [&](int r, const QString& key, const QString& value) {
             auto* k = new QLabel(key, nodeCard);
             k->setStyleSheet("color: gray; background: transparent; border: none;");
-            auto* v = new QLabel(value, nodeCard);
+            auto* v = new ElidedLabel(value, nodeCard);
             v->setStyleSheet("font-weight: bold; background: transparent; border: none;");
             v->setTextInteractionFlags(Qt::TextSelectableByMouse);
             v->setAlignment(Qt::AlignRight);

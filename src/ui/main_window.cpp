@@ -503,7 +503,17 @@ void MainWindow::setupMenus() {
     linkSearchEdit_ = new QLineEdit(this);
     linkSearchEdit_->setPlaceholderText("Find link ID (Ctrl+F)");
     linkSearchEdit_->setClearButtonEnabled(true);
-    linkSearchEdit_->setFixedWidth(200);
+    // Width from the placeholder text, plus what the current style adds
+    // around the text (frame, padding, clear button). The Windows 11 style
+    // adds more than the Windows 10 style, so a fixed width cut the text.
+    {
+        linkSearchEdit_->ensurePolished();
+        const QFontMetrics fm(linkSearchEdit_->font());
+        const int styleExtra = linkSearchEdit_->sizeHint().width()
+                               - 17 * fm.horizontalAdvance(QLatin1Char('x'));
+        linkSearchEdit_->setFixedWidth(qMax(200, styleExtra
+            + fm.horizontalAdvance(linkSearchEdit_->placeholderText()) + 8));
+    }
     linkSearchEdit_->setToolTip("Type a MATSim link ID and press Enter");
     connect(linkSearchEdit_, &QLineEdit::returnPressed, this, &MainWindow::onFindLink);
     menuBar()->setCornerWidget(linkSearchEdit_, Qt::TopRightCorner);

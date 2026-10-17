@@ -83,6 +83,7 @@ set(HEADERS
     src/ui/info_panel.h
     src/ui/hourly_volume_chart.h
     src/ui/panel_style.h
+    src/ui/elided_label.h
     src/ui/timeline_widget.h
     src/ui/progress_dialog.h
     src/ui/video_settings_dialog.h

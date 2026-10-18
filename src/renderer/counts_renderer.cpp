@@ -130,6 +130,11 @@ void CountsRenderer::buildBuffers() {
 void CountsRenderer::render() {
     if (!initialized_ || !showCounts_ || !countsData_) return;
 
+    // Set here, not only in initialize(): the state is shared, and what drew
+    // before (QPainter overlays, the tile layer) leaves it changed
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
     if (buffersNeedUpdate_) {
         buildBuffers();
     }

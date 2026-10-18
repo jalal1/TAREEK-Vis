@@ -3,13 +3,11 @@
 #include <QWidget>
 #include <QSlider>
 #include <QLabel>
-#include <QPushButton>
-#include <QComboBox>
 #include <QHBoxLayout>
 
 namespace simvis {
 
-// Timeline control widget with slider, play/pause, and speed control
+// Timeline control widget with slider, play state, and playback speed
 class TimelineWidget : public QWidget {
     Q_OBJECT
 
@@ -27,6 +25,8 @@ public:
     // Playback state
     bool isPlaying() const { return isPlaying_; }
     double playbackSpeed() const;
+    // The speeds the ribbon offers, slowest first
+    QList<double> playbackSpeeds() const;
 
 signals:
     void timeChanged(float time);
@@ -36,12 +36,13 @@ signals:
 public slots:
     void setPlaying(bool playing);
     void togglePlayPause();
+    // Select one of playbackSpeeds(); other values are ignored
+    void setPlaybackSpeed(double speed);
 
 private slots:
     void onSliderMoved(int value);
     void onSliderPressed();
     void onSliderReleased();
-    void onSpeedChanged(int index);
 
 private:
     void updateTimeLabel();
@@ -50,12 +51,11 @@ private:
     QSlider* slider_;
     QLabel* timeLabel_;
     QLabel* durationLabel_;
-    QPushButton* playButton_;
-    QComboBox* speedCombo_;
 
     float minTime_ = 0.0f;
     float maxTime_ = 86400.0f;  // 24 hours default
     float currentTime_ = 0.0f;
+    double playbackSpeed_ = 1.0;
     bool isPlaying_ = false;
     bool wasPlayingBeforeDrag_ = false;
     bool isDragging_ = false;  // Track if user is currently dragging the slider

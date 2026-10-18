@@ -54,7 +54,7 @@ void main() {
     // The tracked-vehicle halo is drawn separately by HaloRenderer so the
     // selection ring looks identical everywhere (vehicles, count stations, ...).
 
-    // Icon mode (View > Vehicle Color > By Mode): sample the emoji atlas,
+    // Icon mode (View > Color > By Mode): sample the emoji atlas,
     // oriented to the travel direction WITHOUT ever turning upside-down.
     // The source emoji face LEFT (west). For west-ish headings we use them
     // as-is and tilt by the residual angle; for east-ish headings we mirror
@@ -300,6 +300,13 @@ void VehicleRenderer::setNetworkIndex(NetworkIndex* index) {
 
 void VehicleRenderer::setVehicleIndex(VehicleIndex* index) {
     vehicleIndex_ = index;
+    // The states are keyed by vehicle id, and an id means nothing in another
+    // scenario. Drop them all, or the old run's vehicles stay on the map until
+    // the time changes.
+    activeVehicles_.clear();
+    activeVehicleIds_.clear();
+    activeVehicleCount_ = 0;
+    trackedVehicleId_ = 0;
 }
 
 // ============================================================================
@@ -512,6 +519,11 @@ float VehicleRenderer::getLinkAngle(uint32_t linkId) const {
 void VehicleRenderer::render() {
     if (!initialized_ || activeVehicles_.empty()) return;
 
+    // Set here, not only in initialize(): the state is shared, and what drew
+    // before (QPainter overlays, the tile layer) leaves it changed
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
     // Vertex format: [X, Y, R, G, B, Angle, Selected, Shape, Size] = 9 floats per vertex
     constexpr int VERTEX_SIZE = 9;
 
@@ -530,7 +542,7 @@ void VehicleRenderer::render() {
         if (iconMode) {
             // shape carries the atlas tile index: 0=car, 1=bus, 2=tram, 3=rail.
             // Icons need a larger sprite than glyphs to stay legible; the
-            // Vehicle Size menu (vehicleSize_) still scales them.
+            // Vehicle size choice (vehicleSize_) still scales them.
             TransitMode mode = vehicleIndex_ ? vehicleIndex_->getVehicleMode(vehicleId)
                                              : TransitMode::Unknown;
             switch (mode) {

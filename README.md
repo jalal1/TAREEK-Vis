@@ -2,6 +2,8 @@
 
 A high-performance desktop application for visualizing MATSim simulation outputs (network and events).
 
+<p align="center"><img src="assets/screenshots/tareek-vis-tour.gif" width="100%" alt="A 30-second tour of TAREEK-Vis" /></p>
+
 <table align="center">
   <tr>
     <td width="50%" align="center">
@@ -50,38 +52,51 @@ here once available, along with the official ACM DOI link.
 
 ## Features
 
-- Load and visualize MATSim network files (nodes and links)
-- Animate vehicle movements from events files
-- Click a vehicle to track it: driver, per-day trip list (departure/arrival
-  activity, times, mode per leg), transit line/route and live passenger counts
-- Click a road link to see its details and its hourly traffic volume chart
-- Find a link by its MATSim link ID (Ctrl+F)
-- Export the hourly volume chart as PNG or PDF
-- What-if scenarios: select road links to close and export a scenario file
-  for TAREEK
-- Time-based playback with variable speed control
-- Pan and zoom navigation
-- Memory-efficient handling of large datasets (2GB+ events)
-- Automatic preprocessing with caching (cache format changes trigger a
-  one-time automatic re-preprocess)
+- Open a MATSim run (network, events and an optional transit schedule) and
+  play the vehicles over the day.
+- All commands on a ribbon, with a search box and a built-in user guide (F1).
+- Click a vehicle to see the trips of its driver, or the passengers of a
+  transit vehicle. Show the route of a person on the map.
+- Find a link, a person or a vehicle by its ID.
+- Click a road to see its details and its hourly traffic volume.
+- Compare simulated volumes with traffic counts.
+- Show bus, tram and rail routes and stops.
+- Show the density of each activity type along the road network.
+- Select roads to close and export a what-if scenario file for TAREEK.
+- Export the map as PNG or PDF, the hourly chart as PNG or PDF, and a video
+  as MP4.
+- Handles large runs (events files of 2 GB and more) with a disk cache.
+
+## Documentation
+
+The user guide is in [help/](help/index.md). The same guide is built into
+TAREEK-Vis: press **F1**, or click **Help > User Guide**.
+
+- [Get started](help/getting-started.md)
+- [Open a simulation run](help/open-a-run.md)
+- [Ribbon commands](help/ribbon.md)
+- [Keyboard shortcuts and mouse](help/shortcuts.md)
+- [Input files](help/input-files.md)
+- [Troubleshooting](help/troubleshooting.md)
+- [Privacy and security](help/privacy.md)
+
+## Maintainer and contributions
+
+TAREEK-Vis is maintained by [Jalal Khalil](https://jalal1.github.io/).
+Contributions are welcome and encouraged: open an
+[issue](https://github.com/jalal1/TAREEK-Vis/issues) or a pull request. When
+you change a feature that users see, also update the help (see
+[Update the help](#update-the-help-maintainers)).
 
 ## Download & Install (Windows, no build required)
 
-For most users, the easiest way to run TAREEK-Vis is the prebuilt installer —
-no Qt, no compiler, no MSYS2 needed.
+1. Download `TAREEK-Vis-Setup-x.y.z.exe` from the
+   [Releases page](https://github.com/jalal1/TAREEK-Vis/releases). A portable
+   ZIP is also attached.
+2. Run the installer. It does not need administrator rights.
 
-1. Go to the [Releases page](https://github.com/jalal1/TAREEK-Vis/releases)
-   and download `TAREEK-Vis-Setup-x.y.z.exe` from the latest release
-   (a portable `TAREEK-Vis-x.y.z-portable.zip` is also attached if you'd
-   rather not install anything — just unzip and run `TAREEK-Vis.exe`).
-2. Run the installer. It doesn't need admin rights (installs for your user
-   only).
-3. Windows SmartScreen may show "Windows protected your PC" because the
-   installer isn't code-signed — click **More info → Run anyway**.
-4. Launch TAREEK-Vis from the Start menu (or desktop shortcut, if selected
-   during install).
-
-The rest of this section is for building from source instead.
+For more information, see [Get started](help/getting-started.md). The rest of
+this page is for developers.
 
 ## Requirements
 
@@ -161,115 +176,23 @@ git tag v1.0.1
 git push origin v1.0.1
 ```
 
-## Usage
+### Update the help (maintainers)
 
-1. Launch TAREEK-Vis
-2. File → Open Folder... (Ctrl+O) and pick your simulation output folder
-   - TAREEK-Vis finds `*network*.xml[.gz]` and `*events*.xml[.gz]` automatically
-   - A `*transitSchedule*.xml[.gz]` file is loaded automatically if present
-   - If a folder has multiple candidates, files with the `output_` prefix are
-     preferred; otherwise TAREEK-Vis asks which one to use
-   - For non-standard layouts (e.g. network and events in different folders),
-     use File → Open Files (Advanced)...
-3. Wait for preprocessing (first time only - creates cached .bin files)
-4. Use the timeline to play/pause and scrub through the simulation
-5. Recently opened folders appear under File → Recent Folders (last 5)
+The user guide in `help/` is built into the executable. When you add or change
+a feature that users see, update the help in the same change:
 
-You can also launch with a folder argument: `TAREEK-Vis <folder>`
+1. Change the topic page in `help/`, or add a new `help/<topic>.md`.
+2. For a new page, add a line to `help/index.md`. That file is the table of
+   contents of the help window.
+3. Add new ribbon buttons to `help/ribbon.md` and new shortcuts to
+   `help/shortcuts.md`.
+4. Put screenshots in `help/images/`, at most 720 px wide.
+5. If a new ribbon tab needs its own page for F1, add it to `pageOfTab` in
+   `src/ui/main_window.cpp`.
 
-### Road Links and Hourly Volume
-
-1. Click a road on the map. The info panel shows the link details and a chart
-   of the vehicles on the link in each hour of the day.
-2. To find a link by its ID, press Ctrl+F, type the MATSim link ID and press
-   Enter. The map zooms to the link and opens its chart.
-3. To save the chart, click **Export chart...** under the chart, or right-click
-   the chart. Give the file name the extension `.png` or `.pdf`. The title of
-   the exported chart shows the link ID and the experiment folder name.
-
-When you open a different experiment folder, the link you looked at opens
-again in the new run (TAREEK-Vis finds it by its ID). Use this to compare the
-chart of the same link in two runs, for example a baseline and a scenario.
-
-### What-If Scenarios (Road Closures)
-
-TAREEK-Vis makes the scenario file. TAREEK then runs the baseline again with
-the selected links closed to cars.
-
-1. Open the output folder of the baseline run.
-2. Ctrl+click a road to add it to the **Selected links** panel. TAREEK-Vis adds
-   both directions of the road. Selected links show in red on the map.
-   Ctrl+click the road again to remove it.
-3. In the panel, uncheck a row to keep that link out of the file (for example,
-   to close only one direction). To remove rows, select them and click
-   **Remove** (or press Delete).
-4. Type a **Name** (letters, digits, `_` and `-` only) and, if you want, a
-   **Description**.
-5. Make sure that **Base run** shows the name of the baseline experiment
-   folder. If you opened `experiments/<id>/output`, it shows `<id>`.
-6. Click **Export scenario file...**. If the button is off, the panel tells you
-   why.
-
-The file contains only the checked links:
-
-```json
-{
-  "name": "hwy15_bridge_closure",
-  "description": "Full closure of the Hwy 15 bridge, both directions",
-  "base_experiment": "experiment_20261012_101500",
-  "closures": [
-    { "type": "close", "link_ids": ["48211", "48212"] }
-  ]
-}
-```
-
-Run it in TAREEK:
-
-```bash
-python run_scenario.py run --base <baseline folder> --scenario hwy15_bridge_closure.json
-```
-
-### Keyboard Shortcuts
-
-- **Space**: Play/Pause
-- **F**: Fit network to view
-- **Ctrl+F**: Find a link by its ID
-- **+/-**: Zoom in/out
-- **Home**: Go to start
-- **End**: Go to end
-
-### Mouse Controls
-
-- **Left drag**: Pan
-- **Scroll wheel**: Zoom
-- **Click**: Show a vehicle, stop, route or road link in the info panel
-- **Ctrl+click**: Add a road to the scenario selection, or remove it
-- **Right-click the hourly chart**: Export the chart
-
-## Input File Format
-
-TAREEK-Vis expects MATSim-compatible XML files:
-
-### network.xml(.gz)
-```xml
-<network>
-  <nodes>
-    <node id="1" x="123.45" y="678.90" />
-  </nodes>
-  <links>
-    <link id="1" from="1" to="2" length="100" freespeed="13.89" />
-  </links>
-</network>
-```
-
-### events.xml(.gz)
-```xml
-<events>
-  <event time="0.0" type="vehicle enters traffic" vehicle="v1" link="1" />
-  <event time="10.0" type="entered link" vehicle="v1" link="2" />
-  <event time="20.0" type="left link" vehicle="v1" link="1" />
-</events>
-```
+Write short steps in plain English: one action for each step, and the
+command path as **Tab > Button**. CMake finds new files in `help/` when you
+build again.
 
 ## Architecture
 
@@ -300,6 +223,7 @@ TAREEK-Vis is licensed under the [GNU General Public License v3.0](LICENSE).
 | [PugiXML](https://pugixml.org/) | MIT | XML parsing (bundled) |
 | [ZLIB](https://www.zlib.net/) | Zlib License | Gzip decompression |
 | [FFmpeg](https://ffmpeg.org/) | LGPL/GPL | Video recording (optional, external subprocess) |
+| [Lucide](https://lucide.dev/) | ISC | Ribbon icons (bundled) |
 
 ### Background Map Tiles
 
@@ -313,11 +237,6 @@ requires attribution when its imagery is shown, reproduced, or published:
 | OpenStreetMap | [OpenStreetMap](https://www.openstreetmap.org/copyright) Standard tile layer | © OpenStreetMap contributors |
 | Satellite | [Esri World Imagery](https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9) (ArcGIS Online) | Esri, Maxar, Earthstar Geographics, and the GIS User Community |
 | Topographic | [OpenTopoMap](https://opentopomap.org/) | © OpenStreetMap contributors, © OpenTopoMap (CC-BY-SA) |
-
-TAREEK-Vis keeps downloaded tiles in a disk cache (up to 300 MB, in
-`%LOCALAPPDATA%\TAREEK-Vis\cache\tiles` on Windows), so an area you saw
-before loads fast, also after a restart. Until a tile downloads, a blurred
-tile from a different zoom level shows in its place.
 
 If you publish figures, screenshots, or videos produced with a background map
 enabled, include the corresponding attribution in the caption or credits.

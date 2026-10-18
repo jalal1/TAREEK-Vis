@@ -22,6 +22,13 @@ public:
                          Qt::TextElideMode mode = Qt::ElideRight)
         : QLabel(text, parent), fullText_(text), mode_(mode) {}
 
+    // QLabel::setText is not virtual; use this to change the text later
+    void setFullText(const QString& text) {
+        fullText_ = text;
+        updateGeometry();
+        updateElision();
+    }
+
     QSize sizeHint() const override {
         ensurePolished();
         return QSize(overhead() + fontMetrics().horizontalAdvance(fullText_),

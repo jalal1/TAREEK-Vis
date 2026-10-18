@@ -48,5 +48,14 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
+; The app writes outside {app}: the map tile cache (up to 300 MB) under
+; LocalAppData, and its settings (incl. the recent-folders list) under HKCU.
+; Remove both so an uninstall leaves nothing behind.
+[UninstallDelete]
+Type: filesandordirs; Name: "{localappdata}\{#MyAppName}"
+
+[Registry]
+Root: HKCU; Subkey: "Software\{#MyAppName}"; Flags: uninsdeletekey dontcreatekey
+
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent

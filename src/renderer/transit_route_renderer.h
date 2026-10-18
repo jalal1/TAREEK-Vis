@@ -119,7 +119,7 @@ private:
     ModeStopRange railStopRange_{0, 0};
 
     // Options
-    // All transit layers hidden by default (matches View > Transit menu)
+    // All transit layers hidden by default (matches the Transit tab)
     bool showBus_ = false;
     bool showRail_ = false;
     bool showTram_ = false;

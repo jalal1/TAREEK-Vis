@@ -2,12 +2,20 @@
 #include "panel_style.h"
 #include "elided_label.h"
 #include "hourly_volume_chart.h"
+#include "ribbon/ribbon.h"
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QListWidget>
 #include <QScrollBar>
+#include <QTimer>
+#include <QToolButton>
+#include <QToolTip>
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QMouseEvent>
 #include <QVariant>
 #include <QRegularExpression>
+#include <algorithm>
 #include <cmath>
 
 namespace simvis {
@@ -24,13 +32,11 @@ static void letWrappedLabelShrink(QLabel* label) {
 InfoPanel::InfoPanel(QWidget* parent)
     : QWidget(parent)
 {
-    setFixedWidth(280);
-
     mainLayout_ = new QVBoxLayout(this);
     mainLayout_->setContentsMargins(0, 0, 0, 0);
     mainLayout_->setSpacing(0);
 
-    // Title bar with close button
+    // Title bar; the side panel that holds this page has the close button
     auto* titleBar = new QWidget(this);
     auto* titleLayout = new QHBoxLayout(titleBar);
     titleLayout->setContentsMargins(12, 8, 8, 8);
@@ -38,15 +44,6 @@ InfoPanel::InfoPanel(QWidget* parent)
     titleLabel_ = new QLabel("Info Panel", titleBar);
     titleLabel_->setStyleSheet("font-weight: bold; font-size: 13pt;");
     titleLayout->addWidget(titleLabel_, 1);
-
-    closeButton_ = new QPushButton("x", titleBar);
-    closeButton_->setFixedSize(24, 24);
-    closeButton_->setFlat(true);
-    closeButton_->setStyleSheet(
-        "QPushButton { font-weight: bold; border: none; font-size: 12pt; }"
-        "QPushButton:hover { background-color: rgba(255,255,255,0.1); border-radius: 4px; }");
-    connect(closeButton_, &QPushButton::clicked, this, &InfoPanel::closeRequested);
-    titleLayout->addWidget(closeButton_);
 
     mainLayout_->addWidget(titleBar);
 
@@ -91,6 +88,35 @@ QLabel* InfoPanel::addHeader(const QString& text) {
     letWrappedLabelShrink(label);
     // Insert before the trailing stretch
     contentLayout_->insertWidget(contentLayout_->count() - 1, label);
+    return label;
+}
+
+QLabel* InfoPanel::addHeader(const QString& text, const QString& copyId) {
+    auto* row = new QWidget(contentWidget_);
+    auto* layout = new QHBoxLayout(row);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
+
+    auto* label = new QLabel(text, row);
+    label->setStyleSheet("font-weight: bold; font-size: 13pt; margin-bottom: 4px;");
+    label->setWordWrap(true);
+    letWrappedLabelShrink(label);
+    layout->addWidget(label, 1);
+
+    auto* button = new QToolButton(row);
+    button->setIcon(ribbonIcon("copy"));
+    button->setIconSize(QSize(16, 16));
+    button->setAutoRaise(true);
+    button->setCursor(Qt::PointingHandCursor);
+    button->setToolTip(QString("Copy %1").arg(copyId));
+    connect(button, &QToolButton::clicked, button, [button, copyId]() {
+        QGuiApplication::clipboard()->setText(copyId);
+        QToolTip::showText(button->mapToGlobal(QPoint(0, button->height())),
+                           QString("Copied %1").arg(copyId), button);
+    });
+    layout->addWidget(button, 0, Qt::AlignTop);
+
+    contentLayout_->insertWidget(contentLayout_->count() - 1, row);
     return label;
 }
 
@@ -190,23 +216,28 @@ using panelstyle::modeIcon;
 
 void InfoPanel::showVehicleInfo(const VehicleInfo& info) {
     clearContent();
-    titleLabel_->setText("Vehicle Info");
+    titleLabel_->setText(info.vehicleId == 0 ? "Person Info" : "Vehicle Info");
 
     // Header: person id for driver panels ("person_8509"); transit vehicles
     // keep their vehicle name ("Tram — veh_6760_tram")
     QString title;
+    QString copyId;  // the MATSim id in the title
     if (info.passengerCount >= 0) {
         title = info.mode;
         if (!info.vehicleName.isEmpty())
             title += QString(" — %1").arg(info.vehicleName);
+        copyId = info.vehicleName;
     } else if (!info.personName.isEmpty()) {
         title = info.personName;
+        copyId = info.personName;
     } else if (!info.vehicleName.isEmpty()) {
         title = info.vehicleName;
+        copyId = info.vehicleName;
     } else {
         title = QString("%1 #%2").arg(info.mode).arg(info.vehicleId);
     }
-    addHeader(title);
+    if (copyId.isEmpty()) addHeader(title);
+    else addHeader(title, copyId);
 
     // Transit service section
     if (info.passengerCount >= 0) {
@@ -217,6 +248,48 @@ void InfoPanel::showVehicleInfo(const VehicleInfo& info) {
         if (!info.routeName.isEmpty())
             addBody(QString("Route: %1").arg(info.routeName));
         addBody(QString("Passengers aboard: %1").arg(info.passengerCount));
+
+        // Click a passenger to see their day
+        if (!info.passengers.empty()) {
+            auto* list = new QListWidget(contentWidget_);
+            for (const auto& passenger : info.passengers) {
+                auto* item = new QListWidgetItem(passenger.name, list);
+                item->setData(Qt::UserRole, passenger.personId);
+            }
+            list->setCursor(Qt::PointingHandCursor);
+            list->setToolTip("Click a passenger to show their day");
+            list->setStyleSheet(QString(
+                "QListWidget { font-size: 11pt; background-color: %1; "
+                "border: 1px solid %2; border-radius: 6px; }"
+                "QListWidget::item { padding: 3px 6px; }"
+                "QListWidget::item:hover { background-color: %3; }")
+                .arg(panelstyle::kCardBg, panelstyle::kCardBorder,
+                     panelstyle::kAccentBgTint));
+            // Up to eight rows; a longer list scrolls
+            const int rows = std::min(static_cast<int>(info.passengers.size()), 8);
+            list->setFixedHeight(rows * list->sizeHintForRow(0) + 2 * list->frameWidth() + 2);
+            // Queued: showing the person rebuilds this panel, which deletes the
+            // list. Done inside the list's own click handler, Qt would then
+            // go on in a deleted widget.
+            connect(list, &QListWidget::itemClicked, this, [this](QListWidgetItem* item) {
+                const uint32_t personId = item->data(Qt::UserRole).toUInt();
+                QMetaObject::invokeMethod(this, [this, personId]() {
+                    emit passengerClicked(personId);
+                }, Qt::QueuedConnection);
+            });
+
+            const int scroll = info.vehicleId == passengerListVehicle_
+                ? passengerListScroll_ : 0;
+            passengerListVehicle_ = info.vehicleId;
+            passengerListScroll_ = scroll;
+            connect(list->verticalScrollBar(), &QScrollBar::valueChanged, this,
+                    [this](int value) { passengerListScroll_ = value; });
+            contentLayout_->insertWidget(contentLayout_->count() - 1, list);
+            // The scroll range is known only after the layout
+            QTimer::singleShot(0, list, [list, scroll]() {
+                list->verticalScrollBar()->setValue(scroll);
+            });
+        }
     }
 
     // Trips (cars): card-style list. The person id already appears in the
@@ -325,7 +398,7 @@ void InfoPanel::showLinkInfo(const LinkInfo& info) {
     clearContent();
     titleLabel_->setText("Link Info");
 
-    addHeader(QString("Link %1").arg(info.linkId));
+    addHeader(QString("Link %1").arg(info.linkId), info.linkId);
 
     // Key/value rows in a single card for a clean, aligned look
     auto* card = panelstyle::makeCard(contentWidget_, contentLayout_, false);
@@ -454,7 +527,7 @@ void InfoPanel::showLinkInfo(const LinkInfo& info) {
         addDivider();
         addHeader("Counts");
         addBody(QString("Count station: %1").arg(info.countStationId));
-        addBody("Open File > Load Counts chart from the map to compare volumes.");
+        addBody("Open Home > Load Counts chart from the map to compare volumes.");
     }
 
     scrollArea_->verticalScrollBar()->setValue(0);
@@ -467,7 +540,8 @@ void InfoPanel::showStopInfo(const TransitStop& stop,
     titleLabel_->setText("Stop Info");
 
     // Stop name
-    addHeader(QString::fromStdString(stop.name.empty() ? stop.originalId : stop.name));
+    addHeader(QString::fromStdString(stop.name.empty() ? stop.originalId : stop.name),
+              QString::fromStdString(stop.originalId));
 
     addDivider();
 
@@ -529,7 +603,7 @@ void InfoPanel::showRouteInfo(const TransitLine& line,
     // Route/Line name
     QString displayName = QString::fromStdString(line.name);
     if (displayName.isEmpty()) displayName = QString::fromStdString(line.originalId);
-    addHeader(displayName);
+    addHeader(displayName, QString::fromStdString(line.originalId));
 
     // Mode
     QString modeName = QString::fromStdString(std::string(transitModeName(route.mode)));

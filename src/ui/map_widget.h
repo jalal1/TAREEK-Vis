@@ -94,6 +94,14 @@ public:
     uint32_t trackedVehicle() const { return trackedVehicleId_; }
     bool isTrackingVehicle() const { return trackedVehicleId_ != 0; }
     void stopTracking();
+    // Pan mode: a left-button press never selects. A drag moves the map, and
+    // the camera stops following the tracked vehicle; the vehicle stays
+    // tracked, with its halo.
+    void setPanMode(bool on);
+    // Halo at a fixed map point, for a found vehicle or person that is not on
+    // the road. It shows while no vehicle is tracked.
+    void setHaloPosition(float worldX, float worldY);
+    void clearHaloPosition();
     // Live state of a vehicle this frame (nullptr if not currently active)
     const VehicleState* vehicleState(uint32_t vehicleId) const;
 
@@ -168,6 +176,7 @@ signals:
     void countLinkClicked(uint32_t linkId);            // count link ID
     void networkLinkClicked(uint32_t linkId);          // network link internal ID
     void networkLinkCtrlClicked(uint32_t linkId);      // Ctrl+click: scenario selection
+    void emptyMapClicked();                            // click on no object: pans
 
 protected:
     void initializeGL() override;
@@ -185,7 +194,7 @@ private slots:
 private:
     void updateProjection();
     void updateView();
-    void updateVehicleHalo();  // sync tracked-vehicle halo position/visibility
+    void updateVehicleHalo();  // sync halo to the tracked vehicle or the fixed point
 
     // Shown until a scenario is loaded, so the first window is not a blank
     // rectangle with no indication of what to do next
@@ -250,12 +259,19 @@ private:
     QElapsedTimer playbackClock_;
 
     // Rendering options
-    bool showNodes_ = false;  // Off by default (View > Show Nodes)
+    bool showNodes_ = false;  // Off by default (View > Nodes)
     bool showLinks_ = true;
     bool showVehicles_ = true;
 
     // Vehicle tracking
     uint32_t trackedVehicleId_ = 0;  // 0 = not tracking any vehicle
+    // The camera follows the tracked vehicle; off after a drag in pan mode
+    bool followTracked_ = true;
+    bool panMode_ = false;
+    // Fixed halo point (setHaloPosition); used when no vehicle is tracked
+    bool hasHaloPosition_ = false;
+    float haloX_ = 0.0f;
+    float haloY_ = 0.0f;
 
     // Matrices
     QMatrix4x4 projectionMatrix_;

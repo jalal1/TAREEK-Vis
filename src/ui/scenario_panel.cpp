@@ -1,4 +1,5 @@
 #include "scenario_panel.h"
+#include "elided_label.h"
 #include "core/logger.h"
 
 #include <QComboBox>
@@ -118,11 +119,14 @@ ScenarioPanel::ScenarioPanel(QWidget* parent)
     descriptionEdit_->setFixedHeight(60);
     form->addRow("Description:", descriptionEdit_);
 
-    baseLabel_ = new QLabel(this);
+    // A run folder name is one long word, so it cannot wrap. It is cut in the
+    // middle instead, so that it never makes the panel wider than it is; the
+    // full name is in the tooltip.
+    baseLabel_ = new ElidedLabel(QString(), this, Qt::ElideMiddle);
     baseLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    baseLabel_->setWordWrap(true);
-    baseLabel_->setToolTip("The baseline run. TAREEK runs it again with these links closed.");
-    form->addRow("Base run:", baseLabel_);
+    auto* baseCaption = new QLabel("Base run:", this);
+    baseCaption->setToolTip("The baseline run. TAREEK runs it again with these links closed.");
+    form->addRow(baseCaption, baseLabel_);
     layout->addLayout(form);
 
     statusLabel_ = new QLabel(this);
@@ -215,7 +219,7 @@ std::vector<uint32_t> ScenarioPanel::linkIds() const {
 
 void ScenarioPanel::setBaseExperiment(const QString& name) {
     baseExperiment_ = name;
-    baseLabel_->setText(name.isEmpty() ? QString("(no run loaded)") : name);
+    baseLabel_->setFullText(name.isEmpty() ? QString("(no run loaded)") : name);
     updateExportState();
 }
 
@@ -254,6 +258,7 @@ void ScenarioPanel::updateExportState() {
     countLabel_->setText(total == 0 ? QString("No links")
                                     : QString("%1 of %2 links checked").arg(checked).arg(total));
     clearButton_->setEnabled(total > 0);
+    emit linkCountChanged(total);
 
     const QString why = exportBlocker();
     exportButton_->setEnabled(why.isEmpty());

@@ -1,25 +1,20 @@
 #include "timeline_widget.h"
-#include <QStyle>
 
 namespace simvis {
 
 TimelineWidget::TimelineWidget(QWidget* parent)
     : QWidget(parent)
 {
+    // Play/Pause and the speed are on the ribbon (Home > Playback, Space), so
+    // the row holds only the time and the slider.
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(5, 5, 5, 5);
-
-    // Play/Pause button
-    playButton_ = new QPushButton(this);
-    playButton_->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
-    playButton_->setFixedSize(32, 32);
-    playButton_->setToolTip("Play/Pause (Space)");
-    connect(playButton_, &QPushButton::clicked, this, &TimelineWidget::togglePlayPause);
+    layout->setContentsMargins(10, 5, 10, 5);
+    layout->setSpacing(10);
 
     // Current time label
     timeLabel_ = new QLabel("00:00:00", this);
     timeLabel_->setMinimumWidth(70);
-    timeLabel_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    timeLabel_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 
     // Timeline slider
     slider_ = new QSlider(Qt::Horizontal, this);
@@ -35,27 +30,10 @@ TimelineWidget::TimelineWidget(QWidget* parent)
     durationLabel_ = new QLabel("/ 24:00:00", this);
     durationLabel_->setMinimumWidth(80);
 
-    // Speed selector
-    speedCombo_ = new QComboBox(this);
-    speedCombo_->addItem("0.5x", 0.5);
-    speedCombo_->addItem("1x", 1.0);
-    speedCombo_->addItem("2x", 2.0);
-    speedCombo_->addItem("5x", 5.0);
-    speedCombo_->addItem("10x", 10.0);
-    speedCombo_->addItem("20x", 20.0);
-    speedCombo_->addItem("50x", 50.0);
-    speedCombo_->addItem("100x", 100.0);
-    speedCombo_->setCurrentIndex(1);  // Default 1x
-    speedCombo_->setToolTip("Playback speed");
-    connect(speedCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &TimelineWidget::onSpeedChanged);
-
     // Layout
-    layout->addWidget(playButton_);
     layout->addWidget(timeLabel_);
     layout->addWidget(slider_, 1);
     layout->addWidget(durationLabel_);
-    layout->addWidget(speedCombo_);
 
     setLayout(layout);
 }
@@ -89,13 +67,21 @@ float TimelineWidget::currentTime() const {
 }
 
 double TimelineWidget::playbackSpeed() const {
-    return speedCombo_->currentData().toDouble();
+    return playbackSpeed_;
+}
+
+QList<double> TimelineWidget::playbackSpeeds() const {
+    return {0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0};
+}
+
+void TimelineWidget::setPlaybackSpeed(double speed) {
+    if (speed == playbackSpeed_ || !playbackSpeeds().contains(speed)) return;
+    playbackSpeed_ = speed;
+    emit playbackSpeedChanged(speed);
 }
 
 void TimelineWidget::setPlaying(bool playing) {
     isPlaying_ = playing;
-    playButton_->setIcon(style()->standardIcon(
-        playing ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
     emit playingChanged(playing);
 }
 
@@ -130,11 +116,6 @@ void TimelineWidget::onSliderReleased() {
     if (wasPlayingBeforeDrag_) {
         setPlaying(true);
     }
-}
-
-void TimelineWidget::onSpeedChanged(int index) {
-    Q_UNUSED(index);
-    emit playbackSpeedChanged(playbackSpeed());
 }
 
 void TimelineWidget::updateTimeLabel() {

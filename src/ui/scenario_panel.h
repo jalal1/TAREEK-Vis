@@ -15,6 +15,8 @@ class QTreeWidgetItem;
 
 namespace simvis {
 
+class ElidedLabel;
+
 // "Selected links" panel: the road links picked with Ctrl+click for a what-if
 // scenario, and the export of the scenario file TAREEK runs. The file format is
 // the contract in TAREEK's DESIGN_SCENARIOS.md, section 3.
@@ -51,10 +53,16 @@ signals:
     void selectionChanged(const std::vector<uint32_t>& internalIds);
     // The user double-clicked a row.
     void linkActivated(uint32_t internalId);
+    // Rows were added or removed. Carries the number of rows.
+    void linkCountChanged(int count);
+
+public slots:
+    // Ask where to save the scenario file and write it, or explain why it
+    // cannot be written yet.
+    void onExport();
 
 private slots:
     void updateExportState();
-    void onExport();
     void onRemoveRows();
 
 private:
@@ -69,7 +77,7 @@ private:
     QComboBox* actionCombo_;
     QLineEdit* nameEdit_;
     QPlainTextEdit* descriptionEdit_;
-    QLabel* baseLabel_;
+    ElidedLabel* baseLabel_;
     QLabel* statusLabel_;
     QPushButton* exportButton_;
     QPushButton* clearButton_;

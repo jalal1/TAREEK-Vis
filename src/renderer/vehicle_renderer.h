@@ -66,7 +66,7 @@ public:
     void setTrackedVehicle(uint32_t vehicleId) { trackedVehicleId_ = vehicleId; }
     uint32_t trackedVehicle() const { return trackedVehicleId_; }
 
-    // Per-mode visibility (View > Show Vehicles submenu). Hidden vehicles are
+    // Per-mode visibility (View > Vehicles on the ribbon). Hidden vehicles are
     // neither rendered nor clickable.
     void setShowCars(bool show)  { showCars_ = show; }
     void setShowBuses(bool show) { showBuses_ = show; }

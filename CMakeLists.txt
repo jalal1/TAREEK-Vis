@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(TAREEK-Vis VERSION 1.3.0 LANGUAGES CXX)
+project(TAREEK-Vis VERSION 1.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,6 +48,11 @@ set(SOURCES
     src/ui/counts_chart_dialog.cpp
     src/ui/screenshot_exporter.cpp
     src/ui/scenario_panel.cpp
+    src/ui/side_panel.cpp
+    src/ui/loading_indicator.cpp
+    src/ui/help_window.cpp
+    src/ui/ribbon/ribbon.cpp
+    src/ui/ribbon/icons/ribbon_icons.qrc
     third_party/pugixml.cpp
 )
 
@@ -90,10 +95,27 @@ set(HEADERS
     src/ui/counts_chart_dialog.h
     src/ui/screenshot_exporter.h
     src/ui/scenario_panel.h
+    src/ui/side_panel.h
+    src/ui/loading_indicator.h
+    src/ui/search_box.h
+    src/ui/help_window.h
+    src/ui/ribbon/ribbon.h
 )
 
 # Create executable
 add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
+
+# The user guide: every page and image in help/, built into the executable.
+# A new page is found when CMake runs again, so it needs no line here.
+file(GLOB HELP_FILES CONFIGURE_DEPENDS
+    ${CMAKE_SOURCE_DIR}/help/*.md
+    ${CMAKE_SOURCE_DIR}/help/images/*.png
+)
+qt_add_resources(${PROJECT_NAME} "help"
+    PREFIX "/help"
+    BASE ${CMAKE_SOURCE_DIR}/help
+    FILES ${HELP_FILES}
+)
 
 # The version lives only in the project() call above. Anything that shows it to
 # a user reads it from here, so a release cannot ship mismatched numbers.

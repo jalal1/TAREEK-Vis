@@ -1,8 +1,13 @@
 #include "main_window.h"
 #include "panel_style.h"
+#include "ribbon/ribbon.h"
+#include "side_panel.h"
+#include "search_box.h"
+#include "loading_indicator.h"
 #include "progress_dialog.h"
 #include "video_settings_dialog.h"
 #include "counts_chart_dialog.h"
+#include "help_window.h"
 #include "core/config.h"
 #include "core/logger.h"
 #include "analysis/nkde_scatter.h"
@@ -12,7 +17,6 @@
 #include <QThreadPool>
 #include <QTimer>
 #include <map>
-#include <QMenuBar>
 #include <QMenu>
 #include <QStatusBar>
 #include <QFileDialog>
@@ -25,6 +29,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QApplication>
 #include <QActionGroup>
 #include <QProgressDialog>
@@ -34,10 +39,11 @@
 #include <QDropEvent>
 #include <QMimeData>
 #include <QUrl>
-#include <QDockWidget>
 #include <QLineEdit>
 #include <QToolTip>
+#include <QPointer>
 #include <algorithm>
+#include <functional>
 #include <cmath>
 #include <tuple>
 
@@ -51,7 +57,8 @@ MainWindow::MainWindow(QWidget* parent)
     setAcceptDrops(true);
 
     setupUi();
-    setupMenus();
+    setupActions();
+    setupRibbon();
     setupStatusBar();
 
     // Initialize data managers
@@ -86,20 +93,28 @@ void MainWindow::setupUi() {
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // Horizontal splitter: MapWidget | InfoPanel
+    // Horizontal splitter: MapWidget | side panel
     auto* splitter = new QSplitter(Qt::Horizontal, centralWidget);
     splitter->setChildrenCollapsible(false);
+    splitter->setHandleWidth(3);
 
     // Map widget (main visualization area)
     mapWidget_ = new MapWidget(splitter);
     splitter->addWidget(mapWidget_);
+    loadingIndicator_ = new LoadingIndicator(mapWidget_);
 
-    // Info panel (right side, initially hidden)
-    infoPanel_ = new InfoPanel(splitter);
-    infoPanel_->hide();
-    splitter->addWidget(infoPanel_);
+    // One panel at the right (initially hidden) for everything that is shown
+    // beside the map: the details of what was clicked, and the links selected
+    // for a what-if scenario
+    sidePanel_ = new SidePanel(splitter);
+    infoPanel_ = new InfoPanel();
+    infoPage_ = sidePanel_->addPage(infoPanel_, "Info");
+    scenarioPanel_ = new ScenarioPanel();
+    selectedLinksPage_ = sidePanel_->addPage(scenarioPanel_, "Selected Links", true);
+    sidePanel_->hide();
+    splitter->addWidget(sidePanel_);
 
-    // Map takes all available space, info panel has fixed width
+    // Map takes all available space; the panel keeps its width
     splitter->setStretchFactor(0, 1);
     splitter->setStretchFactor(1, 0);
 
@@ -112,15 +127,7 @@ void MainWindow::setupUi() {
     centralWidget->setLayout(layout);
     setCentralWidget(centralWidget);
 
-    // "Selected links" panel for what-if scenarios
-    scenarioPanel_ = new ScenarioPanel();
-    scenarioDock_ = new QDockWidget("Selected links", this);
-    scenarioDock_->setObjectName("scenarioDock");
-    scenarioDock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    scenarioDock_->setWidget(scenarioPanel_);
-    scenarioDock_->setMinimumWidth(320);
-    addDockWidget(Qt::RightDockWidgetArea, scenarioDock_);
-    scenarioDock_->hide();
+    connect(sidePanel_, &SidePanel::closeRequested, this, &MainWindow::hideSidePanel);
 
     connect(mapWidget_, &MapWidget::networkLinkCtrlClicked,
             this, &MainWindow::onNetworkLinkCtrlClicked);
@@ -164,12 +171,6 @@ void MainWindow::setupUi() {
     connect(infoPanel_, &InfoPanel::panToRequested,
             this, &MainWindow::onInfoPanelPanTo);
 
-    connect(infoPanel_, &InfoPanel::closeRequested, this, [this]() {
-        selectedLinkId_ = kNoLink;
-        infoPanel_->hide();
-        if (showInfoPanelAction_) showInfoPanelAction_->setChecked(false);
-    });
-
     // Connect counts click signal
     connect(mapWidget_, &MapWidget::countLinkClicked,
             this, &MainWindow::onCountLinkClicked);
@@ -181,10 +182,18 @@ void MainWindow::setupUi() {
     // Show vehicle info in the panel when tracking starts/stops
     connect(mapWidget_, &MapWidget::vehicleTrackingChanged,
             this, &MainWindow::onVehicleTrackingChanged);
+    // A click on empty map pans; it lets go of a found object, as it stops
+    // tracking a clicked vehicle
+    connect(mapWidget_, &MapWidget::emptyMapClicked,
+            this, &MainWindow::endSearchFollow);
 
     // Person full-day route overlay toggle from the info panel
     connect(infoPanel_, &InfoPanel::showPersonRouteToggled,
             this, &MainWindow::onShowPersonRouteToggled);
+    // A passenger of a transit vehicle shows like a search for that person:
+    // their day in the panel, and the halo on them
+    connect(infoPanel_, &InfoPanel::passengerClicked, this,
+            [this](uint32_t personId) { showPerson(personId); });
 
     // Single-trip overlay when a trip card is clicked
     connect(infoPanel_, &InfoPanel::tripClicked,
@@ -211,49 +220,54 @@ void MainWindow::setupUi() {
 
 }
 
-void MainWindow::setupMenus() {
-    // File menu
-    auto* fileMenu = menuBar()->addMenu("&File");
+void MainWindow::setupActions() {
+    // File
+    openFolderAction_ = new QAction("&Open Folder...", this);
+    openFolderAction_->setShortcut(QKeySequence::Open);
+    connect(openFolderAction_, &QAction::triggered, this, &MainWindow::openFolder);
 
-    auto* openFolderAction = fileMenu->addAction("&Open Folder...");
-    openFolderAction->setShortcut(QKeySequence::Open);
-    connect(openFolderAction, &QAction::triggered, this, &MainWindow::openFolder);
+    openFilesAction_ = new QAction("Open Files (&Advanced)...", this);
+    connect(openFilesAction_, &QAction::triggered, this, &MainWindow::openFiles);
 
-    auto* openAction = fileMenu->addAction("Open Files (&Advanced)...");
-    connect(openAction, &QAction::triggered, this, &MainWindow::openFiles);
-
-    recentFoldersMenu_ = fileMenu->addMenu("&Recent Folders");
+    recentFoldersMenu_ = new QMenu("&Recent Folders", this);
     recentFoldersMenu_->setToolTipsVisible(true);  // show full path on hover
     updateRecentFoldersMenu();
 
-    fileMenu->addSeparator();
+    rebuildCacheAction_ = new QAction("Re&build Cache...", this);
+    rebuildCacheAction_->setToolTip("Preprocess the open run again");
+    rebuildCacheAction_->setEnabled(false);  // Enabled after a run is loaded
+    connect(rebuildCacheAction_, &QAction::triggered, this, [this]() {
+        if (networkFilePath_.isEmpty()) return;
+        const auto answer = QMessageBox::question(this, "Rebuild Cache",
+            "Preprocess this run again? The network and the events file are "
+            "read again. On a large run this takes some minutes.\n\n"
+            "If you cancel, the current cache stays.");
+        if (answer != QMessageBox::Yes) return;
+        // loadFromPaths sets the paths again, so copy them first
+        const QString network = networkFilePath_;
+        const QString events = eventsFilePath_;
+        const QString transit = transitSchedulePath_;
+        loadFromPaths(network, events, transit, true);
+    });
 
-    loadCountsAction_ = fileMenu->addAction("Load &Counts...");
+    loadCountsAction_ = new QAction("Load &Counts...", this);
     loadCountsAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C));
     loadCountsAction_->setEnabled(false);  // Enabled after network+events loaded
     connect(loadCountsAction_, &QAction::triggered, this, &MainWindow::onLoadCounts);
 
-    fileMenu->addSeparator();
-
-    auto* exitAction = fileMenu->addAction("E&xit");
-    exitAction->setShortcut(QKeySequence::Quit);
-    connect(exitAction, &QAction::triggered, this, &QWidget::close);
-
-    // View menu
-    auto* viewMenu = menuBar()->addMenu("&View");
 
     // --- Network section ---
-    showNodesAction_ = viewMenu->addAction("Show &Nodes");
+    showNodesAction_ = new QAction("Show &Nodes", this);
     showNodesAction_->setCheckable(true);
     showNodesAction_->setChecked(false);  // Off by default: reduces clutter
     connect(showNodesAction_, &QAction::toggled, this, &MainWindow::onShowNodesToggled);
 
-    showLinksAction_ = viewMenu->addAction("Show &Links");
+    showLinksAction_ = new QAction("Show &Links", this);
     showLinksAction_->setCheckable(true);
     showLinksAction_->setChecked(true);
     connect(showLinksAction_, &QAction::toggled, this, &MainWindow::onShowLinksToggled);
 
-    showCountsAction_ = viewMenu->addAction("Show Link &Counts");
+    showCountsAction_ = new QAction("Show Link &Counts", this);
     showCountsAction_->setCheckable(true);
     showCountsAction_->setChecked(false);
     showCountsAction_->setEnabled(false);  // Enabled after counts loaded
@@ -262,185 +276,174 @@ void MainWindow::setupMenus() {
     // --- Activity density heatmap ---
     // One entry per activity type, filled in once a scenario is loaded, plus a
     // command to clear the map.
-    heatmapMenu_ = viewMenu->addMenu("Activity &Heatmap");
+    heatmapMenu_ = new QMenu("Activity &Heatmap", this);
     heatmapMenu_->setEnabled(false);
 
-    viewMenu->addSeparator();
-
     // --- Vehicles section ---
-    // Show Vehicles submenu: master toggle + per-type visibility
-    auto* showVehiclesMenu = viewMenu->addMenu("Show &Vehicles");
-
-    showVehiclesAction_ = showVehiclesMenu->addAction("Show &All Vehicles");
+    // Master toggle + per-type visibility
+    showVehiclesAction_ = new QAction("Show &All Vehicles", this);
     showVehiclesAction_->setCheckable(true);
     showVehiclesAction_->setChecked(true);
     connect(showVehiclesAction_, &QAction::toggled, this, &MainWindow::onShowVehiclesToggled);
 
-    showVehiclesMenu->addSeparator();
-
-    showCarsAction_ = showVehiclesMenu->addAction("Show &Private Vehicles");
+    showCarsAction_ = new QAction("Show &Private Vehicles", this);
     showCarsAction_->setCheckable(true);
     showCarsAction_->setChecked(true);
     connect(showCarsAction_, &QAction::toggled, this, [this](bool checked) {
         mapWidget_->setShowCars(checked);
     });
 
-    showBusVehiclesAction_ = showVehiclesMenu->addAction("Show &Buses");
+    showBusVehiclesAction_ = new QAction("Show &Buses", this);
     showBusVehiclesAction_->setCheckable(true);
     showBusVehiclesAction_->setChecked(true);
     connect(showBusVehiclesAction_, &QAction::toggled, this, [this](bool checked) {
         mapWidget_->setShowBuses(checked);
     });
 
-    showTramVehiclesAction_ = showVehiclesMenu->addAction("Show &Trams");
+    showTramVehiclesAction_ = new QAction("Show &Trams", this);
     showTramVehiclesAction_->setCheckable(true);
     showTramVehiclesAction_->setChecked(true);
     connect(showTramVehiclesAction_, &QAction::toggled, this, [this](bool checked) {
         mapWidget_->setShowTrams(checked);
     });
 
-    showRailVehiclesAction_ = showVehiclesMenu->addAction("Show &Rail");
+    showRailVehiclesAction_ = new QAction("Show &Rail", this);
     showRailVehiclesAction_->setCheckable(true);
     showRailVehiclesAction_->setChecked(true);
     connect(showRailVehiclesAction_, &QAction::toggled, this, [this](bool checked) {
         mapWidget_->setShowRailVehicles(checked);
     });
 
-    // Vehicle Shape submenu
-    auto* vehicleShapeMenu = viewMenu->addMenu("Vehicle &Shape");
+    // Vehicle shape choices
+    vehicleShapeMenu_ = new QMenu("Vehicle &Shape", this);
     auto* shapeGroup = new QActionGroup(this);
 
-    vehicleShapeCircleAction_ = vehicleShapeMenu->addAction("&Circle");
+    vehicleShapeCircleAction_ = vehicleShapeMenu_->addAction("&Circle");
     vehicleShapeCircleAction_->setCheckable(true);
     vehicleShapeCircleAction_->setActionGroup(shapeGroup);
     connect(vehicleShapeCircleAction_, &QAction::triggered, this, &MainWindow::onVehicleShapeCircle);
 
-    vehicleShapeTriangleAction_ = vehicleShapeMenu->addAction("&Triangle (Arrow)");
+    vehicleShapeTriangleAction_ = vehicleShapeMenu_->addAction("&Triangle (Arrow)");
     vehicleShapeTriangleAction_->setCheckable(true);
     vehicleShapeTriangleAction_->setActionGroup(shapeGroup);
     connect(vehicleShapeTriangleAction_, &QAction::triggered, this, &MainWindow::onVehicleShapeTriangle);
 
-    vehicleShapeRectangleAction_ = vehicleShapeMenu->addAction("&Rectangle");
+    vehicleShapeRectangleAction_ = vehicleShapeMenu_->addAction("&Rectangle");
     vehicleShapeRectangleAction_->setCheckable(true);
     vehicleShapeRectangleAction_->setActionGroup(shapeGroup);
     connect(vehicleShapeRectangleAction_, &QAction::triggered, this, &MainWindow::onVehicleShapeRectangle);
 
-    vehicleShapeDiamondAction_ = vehicleShapeMenu->addAction("&Diamond");
+    vehicleShapeDiamondAction_ = vehicleShapeMenu_->addAction("&Diamond");
     vehicleShapeDiamondAction_->setCheckable(true);
     vehicleShapeDiamondAction_->setActionGroup(shapeGroup);
     connect(vehicleShapeDiamondAction_, &QAction::triggered, this, &MainWindow::onVehicleShapeDiamond);
 
-    vehicleShapeMenu->addSeparator();
+    vehicleShapeMenu_->addSeparator();
 
-    vehicleShapeAutoAction_ = vehicleShapeMenu->addAction("&Auto (by mode)");
+    vehicleShapeAutoAction_ = vehicleShapeMenu_->addAction("&Auto (by mode)");
     vehicleShapeAutoAction_->setCheckable(true);
     vehicleShapeAutoAction_->setChecked(true);  // Default
     vehicleShapeAutoAction_->setActionGroup(shapeGroup);
     connect(vehicleShapeAutoAction_, &QAction::triggered, this, &MainWindow::onVehicleShapeAuto);
 
-    // Vehicle Size submenu
-    auto* vehicleSizeMenu = viewMenu->addMenu("Vehicle Si&ze");
+    // Vehicle size choices
+    vehicleSizeMenu_ = new QMenu("Vehicle Si&ze", this);
     auto* sizeGroup = new QActionGroup(this);
 
-    vehicleSizeSmallAction_ = vehicleSizeMenu->addAction("&Small (3px)");
+    vehicleSizeSmallAction_ = vehicleSizeMenu_->addAction("&Small (3px)");
     vehicleSizeSmallAction_->setCheckable(true);
     vehicleSizeSmallAction_->setActionGroup(sizeGroup);
     connect(vehicleSizeSmallAction_, &QAction::triggered, this, &MainWindow::onVehicleSizeSmall);
 
-    vehicleSizeMediumAction_ = vehicleSizeMenu->addAction("&Medium (5px)");
+    vehicleSizeMediumAction_ = vehicleSizeMenu_->addAction("&Medium (5px)");
     vehicleSizeMediumAction_->setCheckable(true);
     vehicleSizeMediumAction_->setActionGroup(sizeGroup);
     connect(vehicleSizeMediumAction_, &QAction::triggered, this, &MainWindow::onVehicleSizeMedium);
 
-    vehicleSizeLargeAction_ = vehicleSizeMenu->addAction("&Large (8px)");
+    vehicleSizeLargeAction_ = vehicleSizeMenu_->addAction("&Large (8px)");
     vehicleSizeLargeAction_->setCheckable(true);
     vehicleSizeLargeAction_->setChecked(true);  // Default
     vehicleSizeLargeAction_->setActionGroup(sizeGroup);
     connect(vehicleSizeLargeAction_, &QAction::triggered, this, &MainWindow::onVehicleSizeLarge);
 
-    // Vehicle Color submenu
-    auto* vehicleColorMenu = viewMenu->addMenu("Vehicle &Color");
+    // Vehicle color choices
+    vehicleColorMenu_ = new QMenu("Vehicle &Color", this);
     auto* colorGroup = new QActionGroup(this);
 
-    vehicleColorSpeedAction_ = vehicleColorMenu->addAction("By &Speed");
+    vehicleColorSpeedAction_ = vehicleColorMenu_->addAction("By &Speed");
     vehicleColorSpeedAction_->setCheckable(true);
     vehicleColorSpeedAction_->setChecked(true);  // Default
     vehicleColorSpeedAction_->setActionGroup(colorGroup);
     connect(vehicleColorSpeedAction_, &QAction::triggered, this, &MainWindow::onVehicleColorSpeed);
 
-    vehicleColorModeAction_ = vehicleColorMenu->addAction("By &Mode (Icons)");
+    vehicleColorModeAction_ = vehicleColorMenu_->addAction("By &Mode (Icons)");
     vehicleColorModeAction_->setCheckable(true);
     vehicleColorModeAction_->setActionGroup(colorGroup);
     connect(vehicleColorModeAction_, &QAction::triggered, this, &MainWindow::onVehicleColorMode);
 
-    viewMenu->addSeparator();
-
     // --- Transit section ---
-    auto* transitMenu = viewMenu->addMenu("&Transit");
-
     // All transit layers start hidden; users enable what they need
-    showBusRoutesAction_ = transitMenu->addAction("Show &Bus Routes");
+    showBusRoutesAction_ = new QAction("Show &Bus Routes", this);
     showBusRoutesAction_->setCheckable(true);
     showBusRoutesAction_->setChecked(false);
     connect(showBusRoutesAction_, &QAction::toggled, this, &MainWindow::onShowBusRoutesToggled);
 
-    showTramRoutesAction_ = transitMenu->addAction("Show T&ram Routes");
+    showTramRoutesAction_ = new QAction("Show T&ram Routes", this);
     showTramRoutesAction_->setCheckable(true);
     showTramRoutesAction_->setChecked(false);
     connect(showTramRoutesAction_, &QAction::toggled, this, &MainWindow::onShowTramRoutesToggled);
 
-    showRailRoutesAction_ = transitMenu->addAction("Show Ra&il Routes");
+    showRailRoutesAction_ = new QAction("Show Ra&il Routes", this);
     showRailRoutesAction_->setCheckable(true);
     showRailRoutesAction_->setChecked(false);
     connect(showRailRoutesAction_, &QAction::toggled, this, &MainWindow::onShowRailRoutesToggled);
 
-    showBusStopsAction_ = transitMenu->addAction("Show Bus &Stops");
+    showBusStopsAction_ = new QAction("Show Bus &Stops", this);
     showBusStopsAction_->setCheckable(true);
     showBusStopsAction_->setChecked(false);
     connect(showBusStopsAction_, &QAction::toggled, this, &MainWindow::onShowBusStopsToggled);
 
-    transitMenu->addSeparator();
-
-    // Route Thickness submenu
-    auto* thicknessMenu = transitMenu->addMenu("Route &Thickness");
+    // Route thickness choices
+    routeThicknessMenu_ = new QMenu("Route &Thickness", this);
     auto* thicknessGroup = new QActionGroup(this);
 
-    routeThicknessThinAction_ = thicknessMenu->addAction("T&hin (1px)");
+    routeThicknessThinAction_ = routeThicknessMenu_->addAction("T&hin (1px)");
     routeThicknessThinAction_->setCheckable(true);
     routeThicknessThinAction_->setActionGroup(thicknessGroup);
     connect(routeThicknessThinAction_, &QAction::triggered, this, &MainWindow::onRouteThicknessThin);
 
-    routeThicknessMediumAction_ = thicknessMenu->addAction("&Medium (2px)");
+    routeThicknessMediumAction_ = routeThicknessMenu_->addAction("&Medium (2px)");
     routeThicknessMediumAction_->setCheckable(true);
     routeThicknessMediumAction_->setChecked(true);  // Default
     routeThicknessMediumAction_->setActionGroup(thicknessGroup);
     connect(routeThicknessMediumAction_, &QAction::triggered, this, &MainWindow::onRouteThicknessMedium);
 
-    routeThicknessThickAction_ = thicknessMenu->addAction("Thic&k (4px)");
+    routeThicknessThickAction_ = routeThicknessMenu_->addAction("Thic&k (4px)");
     routeThicknessThickAction_->setCheckable(true);
     routeThicknessThickAction_->setActionGroup(thicknessGroup);
     connect(routeThicknessThickAction_, &QAction::triggered, this, &MainWindow::onRouteThicknessThick);
 
-    viewMenu->addSeparator();
-
-    // --- Info Panel toggle ---
-    showInfoPanelAction_ = viewMenu->addAction("Show &Info Panel");
+    // --- Side panel pages ---
+    // Each action shows its page of the side panel, and is checked while that
+    // page is in front. Using the action of the page in front closes the panel.
+    showInfoPanelAction_ = new QAction("Show &Info Panel", this);
     showInfoPanelAction_->setCheckable(true);
-    showInfoPanelAction_->setChecked(false);
-    connect(showInfoPanelAction_, &QAction::toggled, this, [this](bool checked) {
-        infoPanel_->setVisible(checked);
-        if (!checked) {
-            selectedLinkId_ = kNoLink;
-            infoPanel_->clear();
-        }
+    connect(showInfoPanelAction_, &QAction::triggered, this, [this](bool checked) {
+        if (checked) sidePanel_->showPage(infoPage_);
+        else hideSidePanel();
     });
 
-    viewMenu->addSeparator();
+    showSelectedLinksAction_ = new QAction("Show &Selected Links Panel", this);
+    showSelectedLinksAction_->setCheckable(true);
+    connect(showSelectedLinksAction_, &QAction::triggered, this, [this](bool checked) {
+        if (checked) sidePanel_->showPage(selectedLinksPage_);
+        else hideSidePanel();
+    });
+
+    connect(sidePanel_, &SidePanel::stateChanged, this, &MainWindow::updateSidePanelActions);
 
     // --- Background Map section ---
-    auto* bgMapMenu = viewMenu->addMenu("&Background Map");
-
-    showBackgroundMapAction_ = bgMapMenu->addAction("&Enable Background Map");
+    showBackgroundMapAction_ = new QAction("&Enable Background Map", this);
     showBackgroundMapAction_->setCheckable(true);
     showBackgroundMapAction_->setChecked(false);
     connect(showBackgroundMapAction_, &QAction::toggled, this, [this](bool checked) {
@@ -454,11 +457,9 @@ void MainWindow::setupMenus() {
         mapWidget_->setShowBackgroundMap(checked);
     });
 
-    bgMapMenu->addSeparator();
-
     auto* tileSourceGroup = new QActionGroup(this);
 
-    tileSourceOsmAction_ = bgMapMenu->addAction("&OpenStreetMap");
+    tileSourceOsmAction_ = new QAction("&OpenStreetMap", this);
     tileSourceOsmAction_->setCheckable(true);
     tileSourceOsmAction_->setChecked(true);
     tileSourceOsmAction_->setActionGroup(tileSourceGroup);
@@ -466,108 +467,412 @@ void MainWindow::setupMenus() {
         mapWidget_->setTileSource(TileSource::OpenStreetMap);
     });
 
-    tileSourceSatAction_ = bgMapMenu->addAction("&Satellite (ESRI)");
+    tileSourceSatAction_ = new QAction("&Satellite (ESRI)", this);
     tileSourceSatAction_->setCheckable(true);
     tileSourceSatAction_->setActionGroup(tileSourceGroup);
     connect(tileSourceSatAction_, &QAction::triggered, this, [this]() {
         mapWidget_->setTileSource(TileSource::Satellite);
     });
 
-    tileSourceTopoAction_ = bgMapMenu->addAction("&Topo Map");
+    tileSourceTopoAction_ = new QAction("&Topo Map", this);
     tileSourceTopoAction_->setCheckable(true);
     tileSourceTopoAction_->setActionGroup(tileSourceGroup);
     connect(tileSourceTopoAction_, &QAction::triggered, this, [this]() {
         mapWidget_->setTileSource(TileSource::Topo);
     });
 
-    viewMenu->addAction(scenarioDock_->toggleViewAction());
-    scenarioDock_->toggleViewAction()->setText("Show &Selected Links Panel");
-
-    viewMenu->addSeparator();
 
     // --- Navigation section ---
-    auto* fitAction = viewMenu->addAction("&Fit to Network");
-    fitAction->setShortcut(Qt::Key_F);
-    connect(fitAction, &QAction::triggered, this, &MainWindow::onFitToNetwork);
+    fitAction_ = new QAction("&Fit to Network", this);
+    fitAction_->setShortcut(Qt::Key_F);
+    connect(fitAction_, &QAction::triggered, this, &MainWindow::onFitToNetwork);
 
-    auto* zoomInAction = viewMenu->addAction("Zoom &In");
-    zoomInAction->setShortcut(QKeySequence::ZoomIn);
-    connect(zoomInAction, &QAction::triggered, mapWidget_, &MapWidget::zoomIn);
+    zoomInAction_ = new QAction("Zoom &In", this);
+    zoomInAction_->setShortcut(QKeySequence::ZoomIn);
+    connect(zoomInAction_, &QAction::triggered, mapWidget_, &MapWidget::zoomIn);
 
-    auto* zoomOutAction = viewMenu->addAction("Zoom &Out");
-    zoomOutAction->setShortcut(QKeySequence::ZoomOut);
-    connect(zoomOutAction, &QAction::triggered, mapWidget_, &MapWidget::zoomOut);
+    zoomOutAction_ = new QAction("Zoom &Out", this);
+    zoomOutAction_->setShortcut(QKeySequence::ZoomOut);
+    connect(zoomOutAction_, &QAction::triggered, mapWidget_, &MapWidget::zoomOut);
 
-    // Find a link by its MATSim id. The box sits at the right end of the menu
-    // bar; Ctrl+F puts the cursor in it.
-    linkSearchEdit_ = new QLineEdit(this);
-    linkSearchEdit_->setPlaceholderText("Find link ID (Ctrl+F)");
-    linkSearchEdit_->setClearButtonEnabled(true);
-    // Width from the placeholder text, plus what the current style adds
-    // around the text (frame, padding, clear button). The Windows 11 style
-    // adds more than the Windows 10 style, so a fixed width cut the text.
-    {
-        linkSearchEdit_->ensurePolished();
-        const QFontMetrics fm(linkSearchEdit_->font());
-        const int styleExtra = linkSearchEdit_->sizeHint().width()
-                               - 17 * fm.horizontalAdvance(QLatin1Char('x'));
-        linkSearchEdit_->setFixedWidth(qMax(200, styleExtra
-            + fm.horizontalAdvance(linkSearchEdit_->placeholderText()) + 8));
-    }
-    linkSearchEdit_->setToolTip("Type a MATSim link ID and press Enter");
-    connect(linkSearchEdit_, &QLineEdit::returnPressed, this, &MainWindow::onFindLink);
-    menuBar()->setCornerWidget(linkSearchEdit_, Qt::TopRightCorner);
+    // While on, a left-button drag only moves the map: it selects nothing and
+    // keeps the selection and its halo
+    panModeAction_ = new QAction("&Pan Map", this);
+    panModeAction_->setCheckable(true);
+    panModeAction_->setShortcut(Qt::Key_H);
+    connect(panModeAction_, &QAction::toggled, mapWidget_, &MapWidget::setPanMode);
 
-    auto* findLinkAction = viewMenu->addAction("Find &Link...");
-    findLinkAction->setShortcut(QKeySequence::Find);
-    connect(findLinkAction, &QAction::triggered, this, [this]() {
-        linkSearchEdit_->setFocus(Qt::ShortcutFocusReason);
-        linkSearchEdit_->selectAll();
+    // Find a link, a person or a vehicle by its MATSim id. The box sits in
+    // the tab row of the ribbon, at the right (setupRibbon); Ctrl+F puts the
+    // cursor in it.
+    searchEdit_ = new SearchBox("Find link, person or vehicle ID (Ctrl+F)",
+                                "Find ID (Ctrl+F)", this);
+    searchEdit_->setToolTip("Type a MATSim link, person or vehicle ID and press Enter");
+    connect(searchEdit_, &QLineEdit::returnPressed, this, &MainWindow::onFind);
+
+    findAction_ = new QAction("&Find a Link, Person or Vehicle", this);
+    findAction_->setShortcut(QKeySequence::Find);
+    connect(findAction_, &QAction::triggered, this, [this]() {
+        searchEdit_->setFocus(Qt::ShortcutFocusReason);
+        searchEdit_->selectAll();
     });
 
-    // Export menu
-    auto* exportMenu = menuBar()->addMenu("&Export");
+    // Export
+    exportPdfAction_ = new QAction("Export to &PDF...", this);
+    exportPdfAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_P));
+    connect(exportPdfAction_, &QAction::triggered, this, &MainWindow::onExportPdf);
 
-    auto* exportPdfAction = exportMenu->addAction("Export to &PDF...");
-    exportPdfAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_P));
-    connect(exportPdfAction, &QAction::triggered, this, &MainWindow::onExportPdf);
+    exportPngAction_ = new QAction("Export to P&NG...", this);
+    exportPngAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P));
+    connect(exportPngAction_, &QAction::triggered, this, &MainWindow::onExportPng);
 
-    auto* exportPngAction = exportMenu->addAction("Export to P&NG...");
-    exportPngAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P));
-    connect(exportPngAction, &QAction::triggered, this, &MainWindow::onExportPng);
-
-    // Tools menu
-    auto* toolsMenu = menuBar()->addMenu("&Tools");
-
-    startRecordingAction_ = toolsMenu->addAction("&Record Video...");
+    // Video recording
+    startRecordingAction_ = new QAction("&Record Video...", this);
     startRecordingAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_R));
-    startRecordingAction_->setIcon(QIcon::fromTheme("media-record"));
     connect(startRecordingAction_, &QAction::triggered, this, &MainWindow::onStartRecording);
 
-    stopRecordingAction_ = toolsMenu->addAction("&Stop Recording");
+    stopRecordingAction_ = new QAction("&Stop Recording", this);
     stopRecordingAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R));
-    stopRecordingAction_->setIcon(QIcon::fromTheme("media-playback-stop"));
     stopRecordingAction_->setEnabled(false);  // Disabled until recording starts
     connect(stopRecordingAction_, &QAction::triggered, this, &MainWindow::onStopRecording);
 
-    // Help menu
-    auto* helpMenu = menuBar()->addMenu("&Help");
-
-    auto* aboutAction = helpMenu->addAction("&About");
-    connect(aboutAction, &QAction::triggered, this, [this]() {
-        QMessageBox::about(this, "About TAREEK-Vis",
-            "TAREEK-Vis - Simulation Visualizer\n"
-            "Version 1.0.0\n\n"
-            "A high-performance visualization tool for MATSim simulation outputs.\n\n"
-            "Copyright (c) 2026 TAREEK-Vis Contributors\n"
-            "Licensed under the GNU General Public License v3.0.\n\n"
-            "Third-Party Libraries:\n"
-            "  - Qt6 (LGPL v3.0) - https://www.qt.io\n"
-            "  - PugiXML 1.15 (MIT) - https://pugixml.org\n"
-            "  - ZLIB (Zlib License) - https://www.zlib.net\n"
-            "  - FFmpeg (LGPL/GPL, optional) - https://ffmpeg.org\n\n"
-            "See THIRD_PARTY_LICENSES.md for full license details.");
+    // Help
+    aboutAction_ = new QAction("&About", this);
+    connect(aboutAction_, &QAction::triggered, this, [this]() {
+        // Rich text, so that the links open in the browser
+        QMessageBox box(this);
+        box.setWindowTitle("About TAREEK-Vis");
+        box.setTextFormat(Qt::RichText);
+        box.setTextInteractionFlags(Qt::TextBrowserInteraction);
+        box.setText(
+            "<h3>TAREEK-Vis - Simulation Visualizer</h3>"
+            "<p>Version " TAREEK_VIS_VERSION "<br>"
+            "A visualization tool for MATSim simulation outputs.</p>"
+            "<p>Maintained by <a href='https://jalal1.github.io/'>Jalal Khalil</a>.<br>"
+            "Contributions are welcome and encouraged: "
+            "<a href='https://github.com/jalal1/TAREEK-Vis'>github.com/jalal1/TAREEK-Vis</a></p>"
+            "<p><b>Privacy:</b> TAREEK-Vis reads your files on this computer only. "
+            "It does not send them anywhere and collects no usage data. "
+            "It connects to the internet only to download map tiles while "
+            "the background map is on. See Help &gt; User Guide &gt; "
+            "Privacy and security.</p>"
+            "<p>Copyright (c) 2026 TAREEK-Vis Contributors. Licensed under the "
+            "<a href='https://www.gnu.org/licenses/gpl-3.0.html'>GNU General Public "
+            "License v3.0</a>, without warranty.</p>"
+            "<p>Third-party libraries: Qt6 (LGPL v3.0), PugiXML 1.15 (MIT), "
+            "ZLIB (Zlib License), FFmpeg (LGPL/GPL, optional), Lucide icons (ISC). "
+            "See THIRD_PARTY_LICENSES.md for the full license texts.</p>");
+        box.exec();
     });
+}
+
+void MainWindow::setupRibbon() {
+    // Playback. The timeline owns the state; these actions give it a button
+    // and a shortcut on the ribbon.
+    playPauseAction_ = new QAction("Play/Pause", this);
+    playPauseAction_->setShortcut(Qt::Key_Space);
+    connect(playPauseAction_, &QAction::triggered,
+            timelineWidget_, &TimelineWidget::togglePlayPause);
+    auto showPlaying = [this](bool playing) {
+        playPauseAction_->setIconText(playing ? "Pause" : "Play");
+        playPauseAction_->setIcon(ribbonIcon(playing ? "pause" : "play"));
+    };
+    showPlaying(timelineWidget_->isPlaying());
+    connect(timelineWidget_, &TimelineWidget::playingChanged, this, showPlaying);
+
+    goToStartAction_ = new QAction("Go to Start", this);
+    goToStartAction_->setShortcut(Qt::Key_Home);
+    goToStartAction_->setIcon(ribbonIcon("skip-back"));
+    connect(goToStartAction_, &QAction::triggered, this, [this]() {
+        mapWidget_->setSimulationTime(vehicleIndex_ ? VehicleIndex::toSeconds(vehicleIndex_->minTime()) : 0);
+    });
+
+    goToEndAction_ = new QAction("Go to End", this);
+    goToEndAction_->setShortcut(Qt::Key_End);
+    goToEndAction_->setIcon(ribbonIcon("skip-forward"));
+    connect(goToEndAction_, &QAction::triggered, this, [this]() {
+        mapWidget_->setSimulationTime(vehicleIndex_ ? VehicleIndex::toSeconds(vehicleIndex_->maxTime()) : 0);
+    });
+
+    // The speeds the timeline offers. The timeline keeps the current speed
+    // and tells the map and this menu when it changes.
+    speedMenu_ = new QMenu("Speed", this);
+    speedMenu_->menuAction()->setIcon(ribbonIcon("gauge"));
+    auto* speedGroup = new QActionGroup(this);
+    for (double speed : timelineWidget_->playbackSpeeds()) {
+        auto* action = speedMenu_->addAction(QString("%1x").arg(speed));
+        action->setCheckable(true);
+        action->setData(speed);
+        action->setActionGroup(speedGroup);
+        connect(action, &QAction::triggered, this, [this, speed]() {
+            timelineWidget_->setPlaybackSpeed(speed);
+        });
+    }
+    auto showSpeed = [this](double speed) {
+        for (QAction* action : speedMenu_->actions()) {
+            action->setChecked(action->data().toDouble() == speed);
+        }
+        speedMenu_->menuAction()->setIconText(QString("Speed %1x").arg(speed));
+    };
+    showSpeed(timelineWidget_->playbackSpeed());
+    connect(timelineWidget_, &TimelineWidget::playbackSpeedChanged, this, showSpeed);
+
+    // Icons, and shorter labels where the menu text is long
+    openFolderAction_->setIcon(ribbonIcon("folder-open"));
+    openFolderAction_->setIconText("Open\nFolder");
+    recentFoldersMenu_->menuAction()->setIcon(ribbonIcon("history"));
+    recentFoldersMenu_->menuAction()->setIconText("Recent\nFolders");
+    openFilesAction_->setIcon(ribbonIcon("files"));
+    openFilesAction_->setIconText("Open Files");
+    loadCountsAction_->setIcon(ribbonIcon("chart-column"));
+    rebuildCacheAction_->setIcon(ribbonIcon("refresh-cw"));
+    fitAction_->setIcon(ribbonIcon("maximize"));
+    fitAction_->setIconText("Fit to\nNetwork");
+    zoomInAction_->setIcon(ribbonIcon("zoom-in"));
+    zoomOutAction_->setIcon(ribbonIcon("zoom-out"));
+    panModeAction_->setIcon(ribbonIcon("hand"));
+    panModeAction_->setIconText("Pan");
+
+    ribbon_ = new RibbonBar(this);
+    ribbon_->setSearchWidget(searchEdit_);
+    // Ctrl+F has no button: the search box is its control. The ribbon holds
+    // the action so that the shortcut works.
+    ribbon_->addAction(findAction_);
+
+    auto* home = ribbon_->addTab("Home");
+
+    auto* data = home->addGroup("Data");
+    data->addLargeAction(openFolderAction_);
+    data->addLargeAction(recentFoldersMenu_->menuAction());
+    data->addSmallAction(openFilesAction_);
+    data->addSmallAction(loadCountsAction_);
+    data->addSmallAction(rebuildCacheAction_);
+
+    auto* playback = home->addGroup("Playback");
+    playback->addLargeAction(playPauseAction_);
+    playback->addSmallAction(goToStartAction_);
+    playback->addSmallAction(goToEndAction_);
+    playback->addSmallAction(speedMenu_->menuAction());
+
+    auto* navigate = home->addGroup("Navigate");
+    navigate->addLargeAction(fitAction_);
+    navigate->addLargeAction(panModeAction_);
+    navigate->addSmallAction(zoomInAction_);
+    navigate->addSmallAction(zoomOutAction_);
+
+    // --- View tab ---
+    showNodesAction_->setIcon(ribbonIcon("circle-dot"));
+    showNodesAction_->setIconText("Nodes");
+    showLinksAction_->setIcon(ribbonIcon("spline"));
+    showLinksAction_->setIconText("Links");
+    showCountsAction_->setIcon(ribbonIcon("hash"));
+    showCountsAction_->setIconText("Link Counts");
+    showInfoPanelAction_->setIcon(ribbonIcon("panel-left"));
+    showInfoPanelAction_->setIconText("Info\nPanel");
+    showVehiclesAction_->setIcon(ribbonIcon("eye"));
+    showVehiclesAction_->setIconText("All\nVehicles");
+    showCarsAction_->setIcon(ribbonIcon("car"));
+    showCarsAction_->setIconText("Private");
+    showBusVehiclesAction_->setIcon(ribbonIcon("bus"));
+    showBusVehiclesAction_->setIconText("Bus");
+    showTramVehiclesAction_->setIcon(ribbonIcon("tram-front"));
+    showTramVehiclesAction_->setIconText("Tram");
+    showRailVehiclesAction_->setIcon(ribbonIcon("train-front"));
+    showRailVehiclesAction_->setIconText("Rail");
+    vehicleShapeMenu_->menuAction()->setIcon(ribbonIcon("shapes"));
+    vehicleShapeMenu_->menuAction()->setIconText("Shape");
+    vehicleSizeMenu_->menuAction()->setIcon(ribbonIcon("ruler"));
+    vehicleSizeMenu_->menuAction()->setIconText("Size");
+    vehicleColorMenu_->menuAction()->setIcon(ribbonIcon("palette"));
+    vehicleColorMenu_->menuAction()->setIconText("Color");
+    showBackgroundMapAction_->setIcon(ribbonIcon("map"));
+    showBackgroundMapAction_->setIconText("Background\nMap");
+
+    // The tile sources, for the Source button beside the on/off button.
+    // The actions keep their action group, so one source stays selected.
+    tileSourceMenu_ = new QMenu("Map &Source", this);
+    tileSourceMenu_->addAction(tileSourceOsmAction_);
+    tileSourceMenu_->addAction(tileSourceSatAction_);
+    tileSourceMenu_->addAction(tileSourceTopoAction_);
+    tileSourceMenu_->menuAction()->setIcon(ribbonIcon("layers"));
+    tileSourceMenu_->menuAction()->setIconText("Source");
+
+    auto* view = ribbon_->addTab("View");
+
+    auto* layers = view->addGroup("Layers");
+    layers->addSmallAction(showNodesAction_);
+    layers->addSmallAction(showLinksAction_);
+    layers->addSmallAction(showCountsAction_);
+    layers->addLargeAction(showInfoPanelAction_);
+
+    auto* vehicles = view->addGroup("Vehicles");
+    vehicles->addLargeAction(showVehiclesAction_);
+    vehicles->addSmallAction(showCarsAction_);
+    vehicles->addSmallAction(showBusVehiclesAction_);
+    vehicles->addSmallAction(showTramVehiclesAction_);
+    vehicles->addSmallAction(showRailVehiclesAction_);
+
+    auto* vehicleStyle = view->addGroup("Vehicle Style");
+    vehicleStyle->addSmallAction(vehicleShapeMenu_->menuAction());
+    vehicleStyle->addSmallAction(vehicleSizeMenu_->menuAction());
+    vehicleStyle->addSmallAction(vehicleColorMenu_->menuAction());
+
+    auto* backgroundMap = view->addGroup("Background Map");
+    backgroundMap->addLargeAction(showBackgroundMapAction_);
+    backgroundMap->addSmallAction(tileSourceMenu_->menuAction());
+
+    // --- Transit tab ---
+    showBusRoutesAction_->setIcon(ribbonIcon("bus"));
+    showBusRoutesAction_->setIconText("Bus");
+    showTramRoutesAction_->setIcon(ribbonIcon("tram-front"));
+    showTramRoutesAction_->setIconText("Tram");
+    showRailRoutesAction_->setIcon(ribbonIcon("train-front"));
+    showRailRoutesAction_->setIconText("Rail");
+    showBusStopsAction_->setIcon(ribbonIcon("map-pin"));
+    showBusStopsAction_->setIconText("Bus\nStops");
+    routeThicknessMenu_->menuAction()->setIcon(ribbonIcon("pen-line"));
+    routeThicknessMenu_->menuAction()->setIconText("Route\nThickness");
+
+    auto* transit = ribbon_->addTab("Transit");
+
+    auto* routes = transit->addGroup("Routes");
+    routes->addLargeAction(showBusRoutesAction_);
+    routes->addLargeAction(showTramRoutesAction_);
+    routes->addLargeAction(showRailRoutesAction_);
+
+    auto* stops = transit->addGroup("Stops");
+    stops->addLargeAction(showBusStopsAction_);
+
+    auto* transitStyle = transit->addGroup("Style");
+    transitStyle->addLargeAction(routeThicknessMenu_->menuAction());
+
+    // --- Analysis tab ---
+    // populateHeatmapMenu() rebuilds this menu for each scenario and enables
+    // it; the button follows, because it shows the menu's own action.
+    heatmapMenu_->menuAction()->setIcon(ribbonIcon("flame"));
+    heatmapMenu_->menuAction()->setIconText("Activity\nHeatmap");
+
+    auto* analysis = ribbon_->addTab("Analysis");
+
+    auto* heatmap = analysis->addGroup("Heatmap");
+    heatmap->addLargeAction(heatmapMenu_->menuAction());
+
+    // --- Scenario tab ---
+    showSelectedLinksAction_->setIcon(ribbonIcon("list-checks"));
+    showSelectedLinksAction_->setIconText("Selected\nLinks");
+
+    // The Clear and Export buttons of the panel, as actions for the ribbon
+    clearSelectionAction_ = new QAction("Clear Selection", this);
+    clearSelectionAction_->setIcon(ribbonIcon("eraser"));
+    clearSelectionAction_->setEnabled(!scenarioPanel_->isEmpty());
+    connect(clearSelectionAction_, &QAction::triggered,
+            scenarioPanel_, &ScenarioPanel::clearLinks);
+    connect(scenarioPanel_, &ScenarioPanel::linkCountChanged, this, [this](int count) {
+        clearSelectionAction_->setEnabled(count > 0);
+    });
+
+    exportScenarioAction_ = new QAction("Export Scenario File...", this);
+    exportScenarioAction_->setIcon(ribbonIcon("file-output"));
+    exportScenarioAction_->setIconText("Export\nScenario");
+    // The scenario name and the closure type are set in the panel, so the
+    // panel opens first
+    connect(exportScenarioAction_, &QAction::triggered, this, [this]() {
+        sidePanel_->showPage(selectedLinksPage_);
+        scenarioPanel_->onExport();
+    });
+
+    auto* scenario = ribbon_->addTab("Scenario");
+
+    auto* selection = scenario->addGroup("Selection");
+    selection->addLargeAction(showSelectedLinksAction_);
+    selection->addSmallAction(clearSelectionAction_);
+
+    auto* scenarioExport = scenario->addGroup("Export");
+    scenarioExport->addLargeAction(exportScenarioAction_);
+
+    // --- Export tab ---
+    exportPngAction_->setIcon(ribbonIcon("image"));
+    exportPngAction_->setIconText("PNG");
+    exportPdfAction_->setIcon(ribbonIcon("file-text"));
+    exportPdfAction_->setIconText("PDF");
+    startRecordingAction_->setIcon(ribbonIcon("video"));
+    startRecordingAction_->setIconText("Record");
+    stopRecordingAction_->setIcon(ribbonIcon("square"));
+    stopRecordingAction_->setIconText("Stop");
+
+    auto* exportTab = ribbon_->addTab("Export");
+
+    auto* image = exportTab->addGroup("Image");
+    image->addLargeAction(exportPngAction_);
+    image->addLargeAction(exportPdfAction_);
+
+    auto* video = exportTab->addGroup("Video");
+    video->addLargeAction(startRecordingAction_);
+    video->addLargeAction(stopRecordingAction_);
+
+    // --- Help tab ---
+    aboutAction_->setIcon(ribbonIcon("info"));
+
+    // The list is made from the actions, so it cannot go out of date
+    keyboardShortcutsAction_ = new QAction("&Keyboard Shortcuts", this);
+    keyboardShortcutsAction_->setIcon(ribbonIcon("keyboard"));
+    keyboardShortcutsAction_->setIconText("Keyboard\nShortcuts");
+    connect(keyboardShortcutsAction_, &QAction::triggered, this, [this]() {
+        QString rows;
+        for (const QAction* action : ribbon_->actions()) {
+            if (action->shortcut().isEmpty()) continue;
+            QString text = action->text();
+            text.remove(QLatin1Char('&'));
+            if (text.endsWith(QLatin1String("..."))) text.chop(3);
+            rows += QString("<tr><td><b>%1</b></td><td>%2</td></tr>")
+                .arg(action->shortcut().toString(QKeySequence::NativeText).toHtmlEscaped(),
+                     text.toHtmlEscaped());
+        }
+        rows += "<tr><td><b>Del</b></td><td>Remove the selected rows from the "
+                "Selected Links panel</td></tr>";
+        QMessageBox box(this);
+        box.setWindowTitle("Keyboard Shortcuts");
+        box.setTextFormat(Qt::RichText);
+        box.setText("<table cellspacing='0' cellpadding='3'>" + rows + "</table>");
+        box.exec();
+    });
+
+    // F1 opens the page about the tab in front. The pages are in help/.
+    userGuideAction_ = new QAction("&User Guide", this);
+    userGuideAction_->setShortcut(QKeySequence::HelpContents);
+    userGuideAction_->setIcon(ribbonIcon("book-open"));
+    userGuideAction_->setIconText("User\nGuide");
+    connect(userGuideAction_, &QAction::triggered, this, [this]() {
+        static const QHash<QString, QString> pageOfTab = {
+            {"Home", "getting-started.md"},
+            {"View", "navigate-the-map.md"},
+            {"Transit", "transit.md"},
+            {"Analysis", "heatmap.md"},
+            {"Scenario", "scenarios.md"},
+            {"Export", "export.md"},
+        };
+        if (!helpWindow_) helpWindow_ = new HelpWindow(this);
+        helpWindow_->showPage(pageOfTab.value(ribbon_->currentTabTitle(), "index.md"));
+    });
+
+    reportProblemAction_ = new QAction("Report a &Problem", this);
+    reportProblemAction_->setIcon(ribbonIcon("bug"));
+    reportProblemAction_->setIconText("Report a\nProblem");
+    reportProblemAction_->setToolTip("Open the issue page of TAREEK-Vis on GitHub");
+    connect(reportProblemAction_, &QAction::triggered, this, []() {
+        QDesktopServices::openUrl(QUrl("https://github.com/jalal1/TAREEK-Vis/issues/new"));
+    });
+
+    auto* help = ribbon_->addTab("Help");
+
+    auto* helpGroup = help->addGroup("Help");
+    helpGroup->addLargeAction(userGuideAction_);
+    helpGroup->addLargeAction(keyboardShortcutsAction_);
+    helpGroup->addLargeAction(reportProblemAction_);
+    helpGroup->addLargeAction(aboutAction_);
+
+    // The ribbon takes the place of the menu bar
+    setMenuWidget(ribbon_);
 }
 
 void MainWindow::setupStatusBar() {
@@ -601,9 +906,6 @@ void MainWindow::setupStatusBar() {
 
     vehicleCountLabel_ = new QLabel("Vehicles: 0");
     statusBar()->addPermanentWidget(vehicleCountLabel_);
-
-    zoomLabel_ = new QLabel("Zoom: 100%");
-    statusBar()->addPermanentWidget(zoomLabel_);
 }
 
 void MainWindow::setHeatmapStatus(const QString& message, HeatmapStatus state) {
@@ -691,7 +993,7 @@ void MainWindow::loadFolder(const QString& dirPath) {
         if (eventsPath.isEmpty())  missing << "events (*events*.xml[.gz])";
         QMessageBox::warning(this, "Required Files Not Found",
             QString("Could not find required file(s) in:\n%1\n\nMissing: %2\n\n"
-                    "Use File > Open Files (Advanced)... to pick files manually.")
+                    "Use Home > Open Files to pick files manually.")
                 .arg(dirPath, missing.join(", ")));
         return;
     }
@@ -856,11 +1158,52 @@ void MainWindow::resetScenarioState() {
 
     // Drop the selection: person and vehicle ids mean nothing in a new scenario.
     routePersonPlus1_ = 0;
-    if (infoPanel_) infoPanel_->resetPersonRouteState();
+    infoShowsPerson_ = false;
+    foundVehiclePlus1_ = 0;
+    foundPersonPlus1_ = 0;
+    if (infoPanel_) {
+        infoPanel_->resetPersonRouteState();
+        infoPanel_->clear();
+    }
+
+    // Playback starts again, paused, at the new scenario's start time.
+    timelineWidget_->setPlaying(false);
+
+    // Counts, transit and the CRS describe the old network. A new scenario
+    // without them must not show the old ones.
+    countsData_.reset();
+    mapWidget_->setCountsData(nullptr);
+    showCountsAction_->setChecked(false);
+    showCountsAction_->setEnabled(false);
+    transitData_.reset();
+    mapWidget_->setTransitData(nullptr);
+    networkCrs_ = CRSInfo();
+}
+
+void MainWindow::hideSidePanel() {
+    sidePanel_->hide();
+    // Nothing is inspected while the panel is closed
+    selectedLinkId_ = kNoLink;
+    infoPanel_->clear();
+}
+
+void MainWindow::updateSidePanelActions() {
+    const bool shown = !sidePanel_->isHidden();
+    const int page = sidePanel_->currentPage();
+    showInfoPanelAction_->setChecked(shown && page == infoPage_);
+    showSelectedLinksAction_->setChecked(shown && page == selectedLinksPage_);
+}
+
+void MainWindow::checkBackgroundMapCrs() {
+    if (showBackgroundMapAction_->isChecked() && !networkCrs_.isValid()) {
+        showBackgroundMapAction_->setChecked(false);
+        statusBar()->showMessage(
+            tr("Background map turned off: this network has no known CRS"), 5000);
+    }
 }
 
 void MainWindow::loadFromPaths(const QString& networkPath, const QString& eventsPath,
-                               const QString& transitPath) {
+                               const QString& transitPath, bool rebuildCache) {
     // Every scenario change passes through here, so this is where the previous
     // scenario's state has to go. Without it a density map, a route overlay or
     // a selection from the old network stays on screen over the new one.
@@ -882,7 +1225,7 @@ void MainWindow::loadFromPaths(const QString& networkPath, const QString& events
         setWindowTitle(QString("TAREEK-Vis - Simulation Visualizer  [%1]").arg(shortPath));
     }
 
-    // Remember this folder for File > Recent Folders
+    // Remember this folder for Home > Recent Folders
     addRecentFolder(networkInfo.absolutePath());
 
     // Set up cache directory
@@ -912,7 +1255,6 @@ void MainWindow::loadFromPaths(const QString& networkPath, const QString& events
 
     QString networkBin = cacheDirectory_ + "/" + networkBaseName + ".bin";
     QString vidxPath = cacheDirectory_ + "/" + eventsBaseName + ".vidx";
-    QString crsPath = cacheDirectory_ + "/network.crs";
 
     bool cacheValid = false;
     if (QFileInfo::exists(networkBin) && QFileInfo::exists(vidxPath)) {
@@ -939,15 +1281,18 @@ void MainWindow::loadFromPaths(const QString& networkPath, const QString& events
         LOG_INFO("Cache files missing - will preprocess");
     }
 
+    // Home > Rebuild Cache. Remember it only when there is a cache to fall
+    // back on.
+    rebuildingCache_ = rebuildCache && cacheValid;
+    if (rebuildCache) {
+        LOG_INFO("Cache rebuild requested - will re-preprocess");
+        cacheValid = false;
+    }
+
     if (cacheValid) {
-        // Load cached .bin and .vidx
-        loadBinaryFiles();
-        // Restore CRS from sidecar file
-        loadCachedCRS(crsPath);
-        // Parse transit schedule separately if requested (not cached)
-        if (!transitSchedulePath_.isEmpty()) {
-            parseTransitOnly();
-        }
+        // Load cached .bin and .vidx, the CRS sidecar and the transit
+        // schedule (not cached), on a worker thread
+        loadBinaryFiles(true);
     } else {
         // Need to preprocess (network/events will be regenerated, transit parsed)
         startPreprocessing();
@@ -961,9 +1306,10 @@ void MainWindow::startPreprocessing() {
     preprocessor_->setTransitScheduleFile(transitSchedulePath_);
     preprocessor_->setOutputDirectory(cacheDirectory_);
 
-    // Create progress dialog
+    // Progress card. It closes by itself on success (accepted: the run
+    // loads); after a failure the user closes it (rejected: nothing loads).
     auto* progressDialog = new ProgressDialog(this);
-    progressDialog->setTitle("Preprocessing simulation files...");
+    progressDialog->setAttribute(Qt::WA_DeleteOnClose);
 
     connect(preprocessor_.get(), &Preprocessor::progressChanged,
             progressDialog, &ProgressDialog::setProgress);
@@ -986,6 +1332,7 @@ void MainWindow::startPreprocessing() {
                     crsFile.close();
                 }
             }
+            checkBackgroundMapCrs();
             // Take transit data from preprocessor before it's destroyed
             if (preprocessor_->transitResult()) {
                 transitData_ = preprocessor_->takeTransitResult();
@@ -1002,8 +1349,17 @@ void MainWindow::startPreprocessing() {
 
     connect(progressDialog, &QDialog::accepted,
             this, [this]() {
-        loadBinaryFiles();
-        applyTransitData();
+        rebuildingCache_ = false;
+        loadBinaryFiles(false);
+    });
+    // A rebuild that failed or was cancelled: load the cache again. The .vidx
+    // is written last, after every check for a cancel, so the old one is
+    // still there; the .bin is the old one or a new one of the same network.
+    connect(progressDialog, &QDialog::rejected,
+            this, [this]() {
+        if (!rebuildingCache_) return;
+        rebuildingCache_ = false;
+        loadBinaryFiles(true);
     });
 
     // Run preprocessing in a separate thread
@@ -1018,9 +1374,7 @@ void MainWindow::startPreprocessing() {
     progressDialog->exec();
 }
 
-void MainWindow::loadBinaryFiles() {
-    statusLabel_->setText("Loading network...");
-
+void MainWindow::loadBinaryFiles(bool fromCache) {
     QString networkBaseName = QFileInfo(networkFilePath_).completeBaseName();
     if (networkBaseName.endsWith(".xml")) {
         networkBaseName = networkBaseName.left(networkBaseName.length() - 4);
@@ -1030,39 +1384,94 @@ void MainWindow::loadBinaryFiles() {
         eventsBaseName = eventsBaseName.left(eventsBaseName.length() - 4);
     }
 
-    QString networkBin = cacheDirectory_ + "/" + networkBaseName + ".bin";
-    QString vidxPath = cacheDirectory_ + "/" + eventsBaseName + ".vidx";
+    const QString networkBin = cacheDirectory_ + "/" + networkBaseName + ".bin";
+    const QString vidxPath = cacheDirectory_ + "/" + eventsBaseName + ".vidx";
+    // From the cache, the transit schedule is read here too (it is not
+    // cached). After preprocessing, the preprocessor has read it already.
+    const QString transitPath = fromCache ? transitSchedulePath_ : QString();
 
     // Internal link ids mean nothing in the network about to load. Keep the
     // inspected link by its MATSim id, so the same road opens in this run, and
     // drop the scenario selection: it belongs to the old baseline.
-    std::string carriedLinkId;
+    carriedLinkId_.clear();
     if (selectedLinkId_ != kNoLink && networkIndex_->getLink(selectedLinkId_))
-        carriedLinkId = linkOriginalId(selectedLinkId_).toStdString();
+        carriedLinkId_ = linkOriginalId(selectedLinkId_).toStdString();
     selectedLinkId_ = kNoLink;
     scenarioPanel_->clearLinks();
 
-    // Load network
     LOG_INFO(QString("Loading network binary: %1").arg(networkBin));
-    if (!networkIndex_->loadFile(networkBin)) {
-        LOG_ERROR(QString("Failed to load network binary: %1").arg(networkBin));
-        QMessageBox::critical(this, "Error", "Failed to load network file.");
-        return;
-    }
-
-    statusLabel_->setText("Loading vehicle index...");
-
-    // Load vehicle index into a fresh object rather than reloading in place: a
-    // volume scan from the previous scenario may still be reading the old one,
-    // and it holds its own reference that keeps it alive until it finishes.
-    vehicleIndex_ = std::make_shared<VehicleIndex>();
-
     LOG_INFO(QString("Loading vehicle index: %1").arg(vidxPath));
-    if (!vehicleIndex_->loadFile(vidxPath)) {
-        LOG_ERROR(QString("Failed to load vehicle index: %1").arg(vidxPath));
-        QMessageBox::critical(this, "Error", "Failed to load vehicle index file.");
+    statusLabel_->setText("Loading...");
+    loadingIndicator_->start(tr("Reading the network..."));
+
+    // The files are read into new objects on a worker thread, so the window
+    // stays live and the indicator turns. The objects on screen stay in use
+    // until the new ones are complete. A newer load raises the generation, and
+    // this one's result is then dropped.
+    const uint64_t generation = ++loadGeneration_;
+    QPointer<LoadingIndicator> indicator = loadingIndicator_;
+    auto step = [indicator](const QString& text) {
+        QMetaObject::invokeMethod(indicator, [indicator, text]() {
+            if (indicator) indicator->setText(text);
+        }, Qt::QueuedConnection);
+    };
+    QThread* uiThread = thread();
+
+    auto* watcher = new QFutureWatcher<std::shared_ptr<LoadedFiles>>(this);
+    connect(watcher, &QFutureWatcher<std::shared_ptr<LoadedFiles>>::finished, this,
+            [this, watcher, generation, fromCache, vidxPath]() {
+        const std::shared_ptr<LoadedFiles> files = watcher->result();
+        watcher->deleteLater();
+        if (generation != loadGeneration_) return;  // a newer load replaced it
+        loadingIndicator_->stop();
+        applyLoadedFiles(*files, fromCache, vidxPath);
+    });
+
+    watcher->setFuture(QtConcurrent::run(
+        [networkBin, vidxPath, transitPath, step, uiThread]() {
+            auto files = std::make_shared<LoadedFiles>();
+
+            auto network = std::make_shared<NetworkIndex>();
+            if (!network->loadFile(networkBin)) {
+                files->error = "Failed to load network file.";
+                return files;
+            }
+            // Made on this thread, used on the UI thread from now on
+            network->moveToThread(uiThread);
+            files->network = network;
+
+            step(QObject::tr("Reading the vehicles..."));
+            auto vehicles = std::make_shared<VehicleIndex>();
+            if (!vehicles->loadFile(vidxPath)) {
+                files->error = "Failed to load vehicle index file.";
+                return files;
+            }
+            files->vehicles = vehicles;
+
+            if (!transitPath.isEmpty()) {
+                step(QObject::tr("Reading the transit schedule..."));
+                const std::string path = transitPath.toStdString();
+                files->transit = std::make_unique<TransitScheduleParser::Result>(
+                    transitPath.endsWith(".gz", Qt::CaseInsensitive)
+                        ? TransitScheduleParser::parseGzipFile(path, network->linkIds(), nullptr)
+                        : TransitScheduleParser::parse(path, network->linkIds(), nullptr));
+            }
+            return files;
+        }));
+}
+
+void MainWindow::applyLoadedFiles(LoadedFiles& files, bool fromCache, const QString& vidxPath) {
+    if (!files.error.isEmpty()) {
+        LOG_ERROR(files.error);
+        statusLabel_->setText(files.error);
+        QMessageBox::critical(this, "Error", files.error);
         return;
     }
+
+    // The new run replaces the old one. Anything still reading the old
+    // objects (a volume scan, a density map) holds its own reference.
+    networkIndex_ = files.network;
+    vehicleIndex_ = files.vehicles;
 
     {
         QDir dir(QFileInfo(networkFilePath_).absolutePath());
@@ -1095,6 +1504,7 @@ void MainWindow::loadBinaryFiles() {
 
     // Enable counts loading now that network+events are available
     loadCountsAction_->setEnabled(true);
+    rebuildCacheAction_->setEnabled(true);
 
     // Offer a heatmap for each activity type this scenario contains. Anything
     // cached before the events index was written describes older data, so that
@@ -1116,17 +1526,38 @@ void MainWindow::loadBinaryFiles() {
 
     // After the scan has started, so the panel waits for this run's volumes
     // rather than showing the last run's.
-    if (!carriedLinkId.empty()) {
-        const uint32_t id = networkIndex_->findLinkByOriginalId(carriedLinkId);
+    if (!carriedLinkId_.empty()) {
+        const uint32_t id = networkIndex_->findLinkByOriginalId(carriedLinkId_);
         if (id != UINT32_MAX) {
             onNetworkLinkClicked(id);
             zoomToLink(id);
         } else {
             statusLabel_->setText(statusLabel_->text() +
                 QString("  |  Link %1 is not in this run.")
-                    .arg(QString::fromStdString(carriedLinkId)));
+                    .arg(QString::fromStdString(carriedLinkId_)));
         }
     }
+
+    // From the cache, the CRS comes from the sidecar file and the transit
+    // schedule was read with the other files
+    if (fromCache) {
+        loadCachedCRS(cacheDirectory_ + "/network.crs");
+        checkBackgroundMapCrs();
+        if (files.transit) {
+            if (files.transit->success) {
+                LOG_INFO(QString("Transit parsed: %1 stops, %2 lines")
+                    .arg(files.transit->stops.size()).arg(files.transit->lines.size()));
+                transitData_ = std::move(files.transit);
+            } else {
+                LOG_ERROR(QString("Transit parse failed: %1")
+                    .arg(QString::fromStdString(files.transit->errorMessage)));
+                QMessageBox::warning(this, "Transit Schedule",
+                    QString("Failed to parse transit schedule:\n%1")
+                        .arg(QString::fromStdString(files.transit->errorMessage)));
+            }
+        }
+    }
+    applyTransitData();
 }
 
 void MainWindow::startVolumeAggregation() {
@@ -1397,8 +1828,10 @@ void MainWindow::runHeatmapAsync(const QString& activityType, bool showWhenDone)
             HeatmapStatus::Working);
     }
 
-    NkdvNetwork* net = nkdvNetwork_.get();
-    const NetworkIndex* netIndex = networkIndex_.get();
+    // The worker keeps its own references: a scenario change may replace
+    // both while it is still finishing
+    std::shared_ptr<NkdvNetwork> net = nkdvNetwork_;
+    std::shared_ptr<const NetworkIndex> netIndex = networkIndex_;
     const uint64_t generation = heatmapGeneration_;
     auto* watcher = new QFutureWatcher<NkdeScatter::Result>(this);
     connect(watcher, &QFutureWatcher<NkdeScatter::Result>::finished, this,
@@ -1623,63 +2056,12 @@ void MainWindow::loadCachedCRS(const QString& crsPath) {
     }
 }
 
-void MainWindow::parseTransitOnly() {
-    statusLabel_->setText("Parsing transit schedule...");
-    LOG_INFO(QString("Parsing transit schedule: %1").arg(transitSchedulePath_));
-
-    bool isGzip = transitSchedulePath_.endsWith(".gz", Qt::CaseInsensitive);
-
-    TransitScheduleParser::Result result;
-    if (isGzip) {
-        result = TransitScheduleParser::parseGzipFile(
-            transitSchedulePath_.toStdString(),
-            networkIndex_->linkIds(),
-            nullptr
-        );
-    } else {
-        result = TransitScheduleParser::parse(
-            transitSchedulePath_.toStdString(),
-            networkIndex_->linkIds(),
-            nullptr
-        );
-    }
-
-    if (result.success) {
-        LOG_INFO(QString("Transit parsed: %1 stops, %2 lines")
-            .arg(result.stops.size()).arg(result.lines.size()));
-        transitData_ = std::make_unique<TransitScheduleParser::Result>(std::move(result));
-        applyTransitData();
-    } else {
-        LOG_ERROR(QString("Transit parse failed: %1")
-            .arg(QString::fromStdString(result.errorMessage)));
-        QMessageBox::warning(this, "Transit Schedule",
-            QString("Failed to parse transit schedule:\n%1")
-                .arg(QString::fromStdString(result.errorMessage)));
-    }
-}
-
 void MainWindow::loadNetworkFile(const QString& path) {
     networkFilePath_ = path;
 }
 
 void MainWindow::loadEventsFile(const QString& path) {
     eventsFilePath_ = path;
-}
-
-void MainWindow::keyPressEvent(QKeyEvent* event) {
-    switch (event->key()) {
-        case Qt::Key_Space:
-            timelineWidget_->togglePlayPause();
-            break;
-        case Qt::Key_Home:
-            mapWidget_->setSimulationTime(vehicleIndex_ ? VehicleIndex::toSeconds(vehicleIndex_->minTime()) : 0);
-            break;
-        case Qt::Key_End:
-            mapWidget_->setSimulationTime(vehicleIndex_ ? VehicleIndex::toSeconds(vehicleIndex_->maxTime()) : 0);
-            break;
-        default:
-            QMainWindow::keyPressEvent(event);
-    }
 }
 
 namespace {
@@ -1761,16 +2143,18 @@ void MainWindow::onPreprocessingProgress(int percent, const QString& message) {
 
 void MainWindow::onPreprocessingComplete(bool success) {
     if (success) {
-        loadBinaryFiles();
+        loadBinaryFiles(false);
     }
 }
 
 void MainWindow::onSimulationTimeChanged(float time) {
-    updateStatusBar();
+    // The halo of a found object moves with the time
+    const bool following = foundVehiclePlus1_ != 0 || foundPersonPlus1_ != 0;
+    if (following) updateFoundHalo(false);
 
     // Keep the vehicle info panel live while tracking (throttled to ~2 Hz of
     // wall time is overkill to compute; throttle on sim time delta instead)
-    if (mapWidget_->isTrackingVehicle() && infoPanel_->isVisible()) {
+    if ((mapWidget_->isTrackingVehicle() || following) && infoPanel_->isVisible()) {
         if (std::abs(time - lastVehicleInfoRefreshTime_) >= 1.0f) {
             lastVehicleInfoRefreshTime_ = time;
             refreshVehicleInfoPanel();
@@ -1779,23 +2163,61 @@ void MainWindow::onSimulationTimeChanged(float time) {
 }
 
 void MainWindow::onVehicleTrackingChanged(uint32_t vehicleId) {
+    // The search tracks its vehicle while it is on the road and lets go of it
+    // when it stops. The panel keeps what the search put there.
+    if (searchTracking_) return;
+
     if (vehicleId == 0) {
         // Tracking stopped (e.g. user clicked empty map to pan). Keep the
         // panel content and any route overlay so panning doesn't wipe them.
         return;
     }
 
-    // Tracking a (new) vehicle: reset route state and remember its person
+    // A click on a vehicle replaces the found object
+    endSearchFollow();
+    inspectVehicle(vehicleId);
+}
+
+void MainWindow::inspectVehicle(uint32_t vehicleId) {
+    // A (new) vehicle: reset route state and remember its person
     infoPanel_->resetPersonRouteState();
     mapWidget_->setPersonRouteVisible(false);
     mapWidget_->setPersonRoute({});
     routePersonPlus1_ = vehicleIndex_ ? vehicleIndex_->vehicleDriver(vehicleId) : 0;
     infoVehicleId_ = vehicleId;
+    infoShowsPerson_ = false;
 
     lastVehicleInfoRefreshTime_ = mapWidget_->simulationTime();
     refreshVehicleInfoPanel();
-    infoPanel_->show();
-    showInfoPanelAction_->setChecked(true);
+    sidePanel_->showPage(infoPage_);
+}
+
+void MainWindow::inspectPerson(uint32_t personId) {
+    infoPanel_->resetPersonRouteState();
+    mapWidget_->setPersonRouteVisible(false);
+    mapWidget_->setPersonRoute({});
+    routePersonPlus1_ = personId + 1;
+    infoShowsPerson_ = true;
+
+    // Their own car: the first vehicle of the day that they drive
+    infoVehicleId_ = 0;
+    if (const auto* trips = vehicleIndex_->personTrips(personId)) {
+        for (const PersonTrip& trip : *trips) {
+            if (trip.vehicleId != 0 &&
+                vehicleIndex_->vehicleDriver(trip.vehicleId - 1) == personId + 1) {
+                infoVehicleId_ = trip.vehicleId - 1;
+                break;
+            }
+        }
+    }
+
+    // A found person shows with their route of the day, as after a click on
+    // "Show Person Route"
+    infoPanel_->setPersonRouteShown(true);
+    lastVehicleInfoRefreshTime_ = mapWidget_->simulationTime();
+    refreshVehicleInfoPanel();
+    sidePanel_->showPage(infoPage_);
+    onShowPersonRouteToggled(true);
 }
 
 void MainWindow::onShowPersonRouteToggled(bool show) {
@@ -1836,20 +2258,6 @@ MainWindow::buildActivityMarkers(uint32_t personId, int tripIndex) const {
     if (!actIndices) return markers;
     const auto& allActs = vehicleIndex_->activities();
 
-    // Fallback for events that carried no x/y: the midpoint of the activity's
-    // link. Closer than either endpoint, though still an approximation.
-    auto linkMidpoint = [&](uint32_t linkId, float& x, float& y) -> bool {
-        if (linkId == TRIP_NO_LINK) return false;
-        const auto* link = networkIndex_->getLink(linkId);
-        if (!link) return false;
-        const auto* from = networkIndex_->getNode(link->fromNode);
-        const auto* to = networkIndex_->getNode(link->toNode);
-        if (!from || !to) return false;
-        x = static_cast<float>((from->x + to->x) * 0.5);
-        y = static_cast<float>((from->y + to->y) * 0.5);
-        return true;
-    };
-
     // Single-trip mode: show only the activities bounding the selected leg,
     // i.e. the one ending as it departs and the one starting as it arrives.
     TimeMs windowStart = 0, windowEnd = TRIP_NO_TIME;
@@ -1876,10 +2284,8 @@ MainWindow::buildActivityMarkers(uint32_t personId, int tripIndex) const {
         QString label = vehicleIndex_->actTypeString(act.actTypeId);
         if (label.isEmpty()) continue;
 
-        float x = act.x, y = act.y;
-        if (act.flags & ACT_FLAG_DERIVED_COORD) {
-            if (!linkMidpoint(act.linkId, x, y)) continue;
-        }
+        float x, y;
+        if (!activityPoint(act, x, y)) continue;
         markers.push_back({x, y, panelstyle::actIcon(label), label});
     }
 
@@ -1902,6 +2308,25 @@ MainWindow::buildActivityMarkers(uint32_t personId, int tripIndex) const {
     return unique;
 }
 
+bool MainWindow::activityPoint(const ActivityRecord& act, float& x, float& y) const {
+    if (!(act.flags & ACT_FLAG_DERIVED_COORD)) {
+        x = act.x;
+        y = act.y;
+        return true;
+    }
+    // Fallback for events that carried no x/y: the midpoint of the activity's
+    // link. Closer than either endpoint, though still an approximation.
+    if (act.linkId == TRIP_NO_LINK || !networkIndex_) return false;
+    const auto* link = networkIndex_->getLink(act.linkId);
+    if (!link) return false;
+    const auto* from = networkIndex_->getNode(link->fromNode);
+    const auto* to = networkIndex_->getNode(link->toNode);
+    if (!from || !to) return false;
+    x = static_cast<float>((from->x + to->x) * 0.5);
+    y = static_cast<float>((from->y + to->y) * 0.5);
+    return true;
+}
+
 std::vector<PersonRouteRenderer::Segment>
 MainWindow::buildPersonRouteSegments(uint32_t personId, int tripIndex) const {
     std::vector<PersonRouteRenderer::Segment> segments;
@@ -1921,32 +2346,69 @@ MainWindow::buildPersonRouteSegments(uint32_t personId, int tripIndex) const {
         return true;
     };
 
+    // The activity a leg leaves from (it ends at the departure) or arrives
+    // at (it starts at the arrival), as the activity markers find them
+    const auto* actIndices = vehicleIndex_->activitiesForPerson(personId);
+    const auto& allActs = vehicleIndex_->activities();
+    auto activityAround = [&](TimeMs time, bool endsThen, float& x, float& y) -> bool {
+        if (!actIndices || time == TRIP_NO_TIME) return false;
+        for (uint32_t idx : *actIndices) {
+            const auto& act = allActs[idx];
+            if ((endsThen ? act.endTimeMs : act.startTimeMs) == time)
+                return activityPoint(act, x, y);
+        }
+        return false;
+    };
+
     for (int i = 0; i < static_cast<int>(trips->size()); ++i) {
         if (tripIndex >= 0 && i != tripIndex) continue;  // single-trip mode
         const auto& trip = (*trips)[i];
         if (trip.vehicleId != 0) {
-            // Vehicle leg: follow the vehicle's trajectory links within the
-            // trip's time window (link-by-link path on the network)
+            // Vehicle leg: follow the vehicle's trajectory links from the
+            // boarding to the arrival (link-by-link path on the network).
+            // Not from the departure: on a pt leg the vehicle is elsewhere
+            // while the person waits at the stop.
+            const TimeMs board = trip.boardTimeMs != TRIP_NO_TIME
+                ? trip.boardTimeMs : trip.departTimeMs;
             const auto* traj = vehicleIndex_->trajectory(trip.vehicleId - 1);
-            bool any = false;
+            const size_t first = segments.size();
             if (traj) {
                 for (const auto& seg : traj->segments) {
-                    if (seg.leaveTime <= trip.departTimeMs) continue;
+                    if (seg.leaveTime <= board) continue;
                     if (trip.arriveTimeMs != TRIP_NO_TIME &&
                         seg.enterTime >= trip.arriveTimeMs) break;
                     float fx, fy, tx, ty;
                     if (linkEndpoints(seg.linkId, fx, fy, tx, ty)) {
                         segments.push_back({fx, fy, tx, ty, false});
-                        any = true;
                     }
                 }
             }
-            if (any) continue;
+            if (segments.size() > first) {
+                // The activities (a stop, a home) are beside the road, not on
+                // a node. Short connectors join them to the path, so the legs
+                // of the day form one line.
+                const auto start = segments[first];
+                const auto end = segments.back();
+                float x, y;
+                if (activityAround(trip.departTimeMs, true, x, y))
+                    segments.push_back({x, y, start.x1, start.y1, true});
+                if (activityAround(trip.arriveTimeMs, false, x, y))
+                    segments.push_back({end.x2, end.y2, x, y, true});
+                continue;
+            }
             // No trajectory overlap (e.g. pt rider whose vehicle has no
             // movement events): fall through to a straight connector
         }
 
-        // Teleported leg (walk/bike) or fallback: straight from->to connector
+        // Teleported leg (walk/bike) or fallback: straight from->to connector,
+        // between the activities where the markers are
+        float ax, ay, bx, by;
+        if (activityAround(trip.departTimeMs, true, ax, ay) &&
+            activityAround(trip.arriveTimeMs, false, bx, by)) {
+            segments.push_back({ax, ay, bx, by, true});
+            continue;
+        }
+        // Without those activities: the links' end nodes
         float f1x, f1y, f2x, f2y, t1x, t1y, t2x, t2y;
         if (trip.fromLinkId != TRIP_NO_LINK && trip.toLinkId != TRIP_NO_LINK &&
             linkEndpoints(trip.fromLinkId, f1x, f1y, f2x, f2y) &&
@@ -1961,16 +2423,28 @@ MainWindow::buildPersonRouteSegments(uint32_t personId, int tripIndex) const {
 
 void MainWindow::refreshVehicleInfoPanel() {
     // Prefer the live tracked vehicle; fall back to the last shown one so the
-    // panel keeps working after tracking stops (e.g. user panned the map)
-    uint32_t vehicleId = mapWidget_->trackedVehicle();
+    // panel keeps working after tracking stops (e.g. user panned the map).
+    // A person found by the search stays in the panel, whatever vehicle the
+    // halo is on.
+    uint32_t vehicleId = infoShowsPerson_ ? infoVehicleId_ : mapWidget_->trackedVehicle();
     if (vehicleId == 0) vehicleId = infoVehicleId_;
-    if (vehicleId == 0 || !vehicleIndex_) return;
+    if (!vehicleIndex_) return;
+    if (vehicleId == 0 && !(infoShowsPerson_ && routePersonPlus1_ != 0)) return;
 
     VehicleInfo info;
-    info.vehicleId = vehicleId;
-    info.vehicleName = vehicleIndex_->vehicleIdString(vehicleId);
     info.currentTime = mapWidget_->simulationTime();
     const TimeMs nowMs = VehicleIndex::toTimeMs(info.currentTime);
+
+    if (vehicleId == 0) {
+        // A person with no car of their own: their trips only
+        fillPersonTrips(info, routePersonPlus1_ - 1, nowMs);
+        selectedLinkId_ = kNoLink;
+        infoPanel_->showVehicleInfo(info);
+        return;
+    }
+
+    info.vehicleId = vehicleId;
+    info.vehicleName = vehicleIndex_->vehicleIdString(vehicleId);
 
     const bool isTransit = vehicleIndex_->isTransitVehicle(vehicleId);
     switch (vehicleIndex_->getVehicleMode(vehicleId)) {
@@ -1993,51 +2467,50 @@ void MainWindow::refreshVehicleInfoPanel() {
     }
 
     if (isTransit) {
-        // Transit vehicle: line/route + live passenger count
+        // Transit vehicle: line/route + the passengers aboard now
         if (const auto* svc = vehicleIndex_->transitServiceInfo(vehicleId)) {
             info.lineName = vehicleIndex_->transitLineString(svc->lineStrId);
             info.routeName = vehicleIndex_->transitRouteString(svc->routeStrId);
         }
-        int aboard = vehicleIndex_->passengersAboard(vehicleId, nowMs);
-        // Exclude the driver if they are counted among occupants
-        uint32_t driver = vehicleIndex_->vehicleDriver(vehicleId);
-        if (driver != 0 && aboard > 0) --aboard;
-        info.passengerCount = std::max(aboard, 0);
+        // The driver is aboard too, but is not a passenger
+        const uint32_t driver = vehicleIndex_->vehicleDriver(vehicleId);
+        for (uint32_t personId : vehicleIndex_->personsAboard(vehicleId, nowMs)) {
+            if (personId + 1 == driver) continue;
+            info.passengers.push_back({personId, vehicleIndex_->personIdString(personId)});
+        }
+        info.passengerCount = static_cast<int>(info.passengers.size());
     } else {
         // Car: resolve the driver person and show their day of trips
         uint32_t driver = vehicleIndex_->vehicleDriver(vehicleId);
-        if (driver != 0) {
-            uint32_t personId = driver - 1;
-            info.personName = vehicleIndex_->personIdString(personId);
-            if (const auto* trips = vehicleIndex_->personTrips(personId)) {
-                info.trips.reserve(trips->size());
-                for (const auto& t : *trips) {
-                    VehicleInfo::TripRow row;
-                    row.fromAct = vehicleIndex_->actTypeString(t.fromActTypeId);
-                    row.toAct   = vehicleIndex_->actTypeString(t.toActTypeId);
-                    row.mode    = vehicleIndex_->legModeString(t.legModeId);
-                    row.departSec = VehicleIndex::toSeconds(t.departTimeMs);
-                    row.arriveSec = (t.arriveTimeMs == TRIP_NO_TIME)
-                        ? -1.0f : VehicleIndex::toSeconds(t.arriveTimeMs);
-                    row.midJourney = row.fromAct.isEmpty() && row.toAct.isEmpty();
-                    row.active = nowMs >= t.departTimeMs &&
-                                 (t.arriveTimeMs == TRIP_NO_TIME || nowMs < t.arriveTimeMs);
-                    info.trips.push_back(std::move(row));
-                }
-            }
-        }
+        if (driver != 0) fillPersonTrips(info, driver - 1, nowMs);
     }
 
     selectedLinkId_ = kNoLink;
     infoPanel_->showVehicleInfo(info);
 }
 
-void MainWindow::onActiveVehicleCountChanged(size_t count) {
-    vehicleCountLabel_->setText(QString("Vehicles: %1").arg(count));
+void MainWindow::fillPersonTrips(VehicleInfo& info, uint32_t personId, TimeMs nowMs) const {
+    info.personName = vehicleIndex_->personIdString(personId);
+    const auto* trips = vehicleIndex_->personTrips(personId);
+    if (!trips) return;
+    info.trips.reserve(trips->size());
+    for (const auto& t : *trips) {
+        VehicleInfo::TripRow row;
+        row.fromAct = vehicleIndex_->actTypeString(t.fromActTypeId);
+        row.toAct   = vehicleIndex_->actTypeString(t.toActTypeId);
+        row.mode    = vehicleIndex_->legModeString(t.legModeId);
+        row.departSec = VehicleIndex::toSeconds(t.departTimeMs);
+        row.arriveSec = (t.arriveTimeMs == TRIP_NO_TIME)
+            ? -1.0f : VehicleIndex::toSeconds(t.arriveTimeMs);
+        row.midJourney = row.fromAct.isEmpty() && row.toAct.isEmpty();
+        row.active = nowMs >= t.departTimeMs &&
+                     (t.arriveTimeMs == TRIP_NO_TIME || nowMs < t.arriveTimeMs);
+        info.trips.push_back(std::move(row));
+    }
 }
 
-void MainWindow::updateStatusBar() {
-    // Could update zoom level, etc.
+void MainWindow::onActiveVehicleCountChanged(size_t count) {
+    vehicleCountLabel_->setText(QString("Vehicles: %1").arg(count));
 }
 
 void MainWindow::onShowNodesToggled(bool checked) {
@@ -2150,7 +2623,7 @@ void MainWindow::onTransitStopClicked(int stopIndex) {
 
     selectedLinkId_ = kNoLink;
     infoPanel_->showStopInfo(stop, servingLines);
-    showInfoPanelAction_->setChecked(true);
+    sidePanel_->showPage(infoPage_);
 }
 
 void MainWindow::onTransitRouteClicked(uint32_t lineId) {
@@ -2167,7 +2640,7 @@ void MainWindow::onTransitRouteClicked(uint32_t lineId) {
             }
             selectedLinkId_ = kNoLink;
             infoPanel_->showRouteInfo(line, *best, *transitData_);
-            showInfoPanelAction_->setChecked(true);
+            sidePanel_->showPage(infoPage_);
             return;
         }
     }
@@ -2314,10 +2787,12 @@ void MainWindow::onNetworkLinkClicked(uint32_t linkId) {
 
     // A link selection replaces every other highlight on the map, then draws
     // this link in yellow.
+    endSearchFollow();
     mapWidget_->clearAllHighlights();
     infoPanel_->resetPersonRouteState();
     routePersonPlus1_ = 0;
     infoVehicleId_ = 0;
+    infoShowsPerson_ = false;
     mapWidget_->highlightLink(linkId);
 
     InfoPanel::LinkInfo info;
@@ -2357,7 +2832,7 @@ void MainWindow::onNetworkLinkClicked(uint32_t linkId) {
     }
 
     infoPanel_->showLinkInfo(info);
-    showInfoPanelAction_->setChecked(true);
+    sidePanel_->showPage(infoPage_);
 }
 
 QString MainWindow::linkOriginalId(uint32_t linkId) const {
@@ -2419,34 +2894,248 @@ void MainWindow::onNetworkLinkCtrlClicked(uint32_t linkId) {
     rows.reserve(group.size());
     for (uint32_t id : group) rows.push_back(scenarioRow(id));
     scenarioPanel_->addLinks(rows);
-    scenarioDock_->show();
+    sidePanel_->showPage(selectedLinksPage_);
     statusLabel_->setText(QString("Added %1 link(s) to the selection.").arg(group.size()));
 }
 
-void MainWindow::onFindLink() {
-    const QString wanted = linkSearchEdit_->text().trimmed();
+void MainWindow::onFind() {
+    const QString wanted = searchEdit_->text().trimmed();
     if (wanted.isEmpty()) return;
 
-    auto complain = [this](const QString& message) {
-        statusLabel_->setText(message);
-        QToolTip::showText(linkSearchEdit_->mapToGlobal(
-                               QPoint(0, linkSearchEdit_->height())),
-                           message, linkSearchEdit_);
-    };
-
     if (!networkIndex_ || networkIndex_->linkCount() == 0) {
-        complain("Open a run first.");
+        showSearchMessage("Open a run first.");
         return;
     }
-    const uint32_t id = networkIndex_->findLinkByOriginalId(wanted.toStdString());
-    if (id == UINT32_MAX) {
-        complain(QString("Link not found: %1").arg(wanted));
+
+    // MATSim ids are unique only within one type, so one text can name a
+    // link, a vehicle and a person. Each match is one choice.
+    struct Match {
+        QIcon icon;
+        QString text;
+        std::function<void()> show;
+    };
+    std::vector<Match> matches;
+    const std::string key = wanted.toStdString();
+
+    const uint32_t linkId = networkIndex_->findLinkByOriginalId(key);
+    if (linkId != UINT32_MAX) {
+        matches.push_back({ribbonIcon("spline"), QString("Link %1").arg(wanted),
+            [this, linkId, wanted]() {
+                onNetworkLinkClicked(linkId);
+                zoomToLink(linkId);
+                statusLabel_->setText(QString("Link %1").arg(wanted));
+            }});
+    }
+    if (vehicleIndex_) {
+        const uint32_t vehicleId = vehicleIndex_->findVehicleByOriginalId(key);
+        const uint32_t personId = vehicleIndex_->findPersonByOriginalId(key);
+        // MATSim gives a private car the id of its driver. The person and the
+        // car are then one result: showing the person follows the car.
+        const bool ownCar = vehicleId != UINT32_MAX && personId != UINT32_MAX &&
+                            vehicleIndex_->vehicleDriver(vehicleId) == personId + 1;
+        if (ownCar) {
+            matches.push_back({ribbonIcon("user"),
+                QString("Person %1 (in vehicle %1)").arg(wanted),
+                [this, personId]() { showPerson(personId); }});
+        } else if (vehicleId != UINT32_MAX) {
+            matches.push_back({ribbonIcon("car"), QString("Vehicle %1").arg(wanted),
+                [this, vehicleId]() { showVehicle(vehicleId); }});
+        }
+        if (personId != UINT32_MAX && !ownCar) {
+            matches.push_back({ribbonIcon("user"), QString("Person %1").arg(wanted),
+                [this, personId]() { showPerson(personId); }});
+        }
+    }
+
+    if (matches.empty()) {
+        showSearchMessage(QString("No link, person or vehicle with ID %1").arg(wanted));
         return;
     }
-    onNetworkLinkClicked(id);
-    zoomToLink(id);
-    statusLabel_->setText(QString("Link %1").arg(wanted));
-    mapWidget_->setFocus();
+    if (matches.size() == 1) {
+        matches.front().show();
+        mapWidget_->setFocus();
+        return;
+    }
+
+    // More than one type has this id: let the user choose, never guess
+    QMenu menu(this);
+    for (const Match& match : matches) {
+        QAction* action = menu.addAction(match.icon, match.text);
+        connect(action, &QAction::triggered, this, [this, show = match.show]() {
+            show();
+            mapWidget_->setFocus();
+        });
+    }
+    menu.exec(searchEdit_->mapToGlobal(QPoint(0, searchEdit_->height())));
+}
+
+void MainWindow::showSearchMessage(const QString& message) {
+    statusLabel_->setText(message);
+    QToolTip::showText(searchEdit_->mapToGlobal(QPoint(0, searchEdit_->height())),
+                       message, searchEdit_);
+}
+
+bool MainWindow::showVehicle(uint32_t vehicleId) {
+    const QString name = vehicleIndex_->vehicleIdString(vehicleId);
+    endSearchFollow();
+    foundVehiclePlus1_ = vehicleId + 1;
+    if (!updateFoundHalo(true)) {
+        foundVehiclePlus1_ = 0;
+        showSearchMessage(QString("Vehicle %1 cannot be shown on the map.").arg(name));
+        return false;
+    }
+    // After the halo, so the panel does not take a vehicle tracked before
+    inspectVehicle(vehicleId);
+    statusLabel_->setText(QString("Vehicle %1").arg(name));
+    return true;
+}
+
+bool MainWindow::showPerson(uint32_t personId) {
+    const QString name = vehicleIndex_->personIdString(personId);
+    endSearchFollow();
+    foundPersonPlus1_ = personId + 1;
+    if (!updateFoundHalo(true)) {
+        foundPersonPlus1_ = 0;
+        showSearchMessage(QString("Person %1 has no known place on the map.").arg(name));
+        return false;
+    }
+    inspectPerson(personId);
+    if (mapWidget_->isTrackingVehicle()) {
+        statusLabel_->setText(QString("Person %1, in vehicle %2")
+            .arg(name, vehicleIndex_->vehicleIdString(mapWidget_->trackedVehicle())));
+    } else {
+        statusLabel_->setText(QString("Person %1").arg(name));
+    }
+    return true;
+}
+
+bool MainWindow::updateFoundHalo(bool panToHalo) {
+    if (!vehicleIndex_) return false;
+    if (foundVehiclePlus1_ == 0 && foundPersonPlus1_ == 0) return false;
+    const TimeMs now = VehicleIndex::toTimeMs(mapWidget_->simulationTime());
+    const FoundPlace place = foundPersonPlus1_ != 0
+        ? placeOfPerson(foundPersonPlus1_ - 1, now)
+        : placeOfVehicle(foundVehiclePlus1_ - 1, now);
+
+    searchTracking_ = true;
+    // Tracking id 0 means "no vehicle", so internal vehicle 0 gets a fixed
+    // halo at its position instead, moved on each time change
+    if (place.vehiclePlus1 > 1) {
+        mapWidget_->clearHaloPosition();
+        mapWidget_->setTrackedVehicle(place.vehiclePlus1 - 1);
+    } else {
+        mapWidget_->stopTracking();
+        if (place.hasPoint) {
+            mapWidget_->setHaloPosition(place.x, place.y);
+            if (panToHalo) mapWidget_->panTo(place.x, place.y);
+        } else {
+            mapWidget_->clearHaloPosition();
+        }
+    }
+    searchTracking_ = false;
+    return place.vehiclePlus1 != 0 || place.hasPoint;
+}
+
+void MainWindow::endSearchFollow() {
+    foundVehiclePlus1_ = 0;
+    foundPersonPlus1_ = 0;
+    mapWidget_->clearHaloPosition();
+}
+
+MainWindow::FoundPlace MainWindow::placeOfVehicle(uint32_t vehicleId, TimeMs now) const {
+    FoundPlace place;
+    if (const VehicleState* state = mapWidget_->vehicleState(vehicleId)) {
+        place.vehiclePlus1 = vehicleId + 1;
+        place.hasPoint = true;
+        place.x = state->x;
+        place.y = state->y;
+        return place;
+    }
+
+    // Parked where the driver left it: the driver's last leg that ended
+    // before now was in this vehicle, or, before the first leg, the first
+    // leg is. The halo is at the activity only while the driver is there.
+    const uint32_t driver = vehicleIndex_->vehicleDriver(vehicleId);
+    const auto* trips = driver != 0 ? vehicleIndex_->personTrips(driver - 1) : nullptr;
+    if (trips && !trips->empty()) {
+        const PersonTrip* lastLeg = nullptr;
+        for (const PersonTrip& trip : *trips) {
+            if (trip.arriveTimeMs == TRIP_NO_TIME || trip.arriveTimeMs > now) break;
+            lastLeg = &trip;
+        }
+        const PersonTrip& leg = lastLeg ? *lastLeg : trips->front();
+        if (leg.vehicleId == vehicleId + 1) {
+            const ActivityRecord* act = activityAt(driver - 1, now, false);
+            if (act && activityPoint(*act, place.x, place.y)) {
+                place.hasPoint = true;
+                return place;
+            }
+        }
+    }
+
+    // Else on the network: the end of its last link before now, or the
+    // start of its first link when it has not moved yet
+    const VehicleTrajectory* trajectory = vehicleIndex_->trajectory(vehicleId);
+    if (!trajectory || trajectory->segments.empty() || !networkIndex_) return place;
+    const VehicleSegment* last = nullptr;
+    for (const VehicleSegment& segment : trajectory->segments) {
+        if (segment.leaveTime > now) break;
+        last = &segment;
+    }
+    const auto* link = networkIndex_->getLink(
+        last ? last->linkId : trajectory->segments.front().linkId);
+    if (!link) return place;
+    const auto* node = networkIndex_->getNode(last ? link->toNode : link->fromNode);
+    if (!node) return place;
+    place.hasPoint = true;
+    place.x = static_cast<float>(node->x);
+    place.y = static_cast<float>(node->y);
+    return place;
+}
+
+MainWindow::FoundPlace MainWindow::placeOfPerson(uint32_t personId, TimeMs now) const {
+    FoundPlace place;
+    // Aboard a vehicle that is on the road: on the vehicle. Before boarding
+    // (the wait at a pt stop) the person is at the last activity, which on a
+    // pt trip is the "pt interaction" at the stop.
+    if (const auto* trips = vehicleIndex_->personTrips(personId)) {
+        for (const PersonTrip& trip : *trips) {
+            if (trip.departTimeMs > now) break;
+            const bool aboard = trip.boardTimeMs != TRIP_NO_TIME &&
+                                trip.boardTimeMs <= now &&
+                                (trip.arriveTimeMs == TRIP_NO_TIME || now < trip.arriveTimeMs);
+            if (!aboard || trip.vehicleId == 0) continue;
+            if (const VehicleState* state = mapWidget_->vehicleState(trip.vehicleId - 1)) {
+                place.vehiclePlus1 = trip.vehicleId;
+                place.hasPoint = true;
+                place.x = state->x;
+                place.y = state->y;
+                return place;
+            }
+        }
+    }
+
+    // Else at the activity in progress, or at the last one before a walk, a
+    // teleported leg or a vehicle that is not on the road
+    if (const ActivityRecord* act = activityAt(personId, now, true))
+        place.hasPoint = activityPoint(*act, place.x, place.y);
+    return place;
+}
+
+const ActivityRecord* MainWindow::activityAt(uint32_t personId, TimeMs now,
+                                             bool orLastEnded) const {
+    const auto* indices = vehicleIndex_->activitiesForPerson(personId);
+    if (!indices) return nullptr;
+    const auto& activities = vehicleIndex_->activities();
+    const ActivityRecord* lastEnded = nullptr;
+    for (uint32_t idx : *indices) {
+        const ActivityRecord& act = activities[idx];
+        // The first activity of the day has no start time
+        if (act.startTimeMs != ACT_NO_TIME && act.startTimeMs > now) break;
+        if (act.endTimeMs == ACT_NO_TIME || now < act.endTimeMs) return &act;
+        lastEnded = &act;
+    }
+    return orLastEnded ? lastEnded : nullptr;
 }
 
 void MainWindow::onCountLinkClicked(uint32_t linkId) {

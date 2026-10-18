@@ -379,7 +379,7 @@ void TileRenderer::startDownload(const TileKey& key) {
     request.setUrl(QUrl(tileUrl(key)));
     // The OSM tile usage policy requires a User-Agent that identifies the app
     request.setRawHeader("User-Agent",
-                         "TAREEK-Vis/1.0 (+https://github.com/jalal1/TAREEK-Vis)");
+                         "TAREEK-Vis/" TAREEK_VIS_VERSION " (+https://github.com/jalal1/TAREEK-Vis)");
     request.setAttribute(QNetworkRequest::CacheLoadControlAttribute,
                          QNetworkRequest::PreferCache);
 

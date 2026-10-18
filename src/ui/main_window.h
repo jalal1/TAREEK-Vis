@@ -27,10 +27,14 @@
 #include <unordered_map>
 #include <vector>
 
-class QDockWidget;
 class QLineEdit;
 
 namespace simvis {
+
+class RibbonBar;
+class HelpWindow;
+class SidePanel;
+class LoadingIndicator;
 
 // Hourly traffic for every link: 24 counts per link, laid end to end and
 // indexed by link id (ids are interned sequentially from 0). A flat array
@@ -62,7 +66,6 @@ public slots:
     void loadEventsFile(const QString& path);
 
 protected:
-    void keyPressEvent(QKeyEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
 
     // Dropping a scenario folder onto the window loads it. Finding the right
@@ -82,7 +85,6 @@ private slots:
     void onPreprocessingComplete(bool success);
     void onSimulationTimeChanged(float time);
     void onActiveVehicleCountChanged(size_t count);
-    void updateStatusBar();
 
     // View actions
     void onShowNodesToggled(bool checked);
@@ -140,9 +142,11 @@ private slots:
     // removes it when it is already in the list.
     void onNetworkLinkCtrlClicked(uint32_t linkId);
 
-    // Search box: find a link by its MATSim id, show it like a plain click and
-    // zoom to it.
-    void onFindLink();
+    // Search box: find a link, a vehicle or a person by its MATSim id. A link
+    // shows like a plain click and zooms to it; a vehicle or a person gets a
+    // halo where it is at the current time. When the id names more than one
+    // type, a menu asks which. A person and their own car are one result.
+    void onFind();
 
     // Export
     void onExportPdf();
@@ -150,13 +154,17 @@ private slots:
 
 private:
     void setupUi();
-    void setupMenus();
+    // Every action of the window, with its shortcut and slot
+    void setupActions();
+    // Tabs and groups of buttons for those actions; in place of a menu bar
+    void setupRibbon();
     void setupStatusBar();
 
     // Common tail of all open flows: set paths, title, cache dir, then load
     // from cache or start preprocessing. Transit path may be empty.
+    // rebuildCache preprocesses again even when the cache is up to date.
     void loadFromPaths(const QString& networkPath, const QString& eventsPath,
-                       const QString& transitPath);
+                       const QString& transitPath, bool rebuildCache = false);
     // Find the file for one role (e.g. "network") in dir. Matches
     // *<role>*.xml / *<role>*.xml.gz case-insensitively, prefers the
     // standard MATSim "output_" prefix, asks the user if still ambiguous.
@@ -167,9 +175,15 @@ private:
     void addRecentFolder(const QString& dirPath);
     void updateRecentFoldersMenu();
 
-    // Assemble VehicleInfo for the tracked vehicle and refresh the panel.
-    // No-op if no vehicle is tracked.
+    // Assemble VehicleInfo for the tracked vehicle, or for the person the
+    // search found, and refresh the panel. No-op if neither is set.
     void refreshVehicleInfoPanel();
+    // The person's id and day of trips, for the panel
+    void fillPersonTrips(VehicleInfo& info, uint32_t personId, TimeMs nowMs) const;
+    // Show a vehicle in the panel, or a person: their own car when they
+    // drive one, else their trips only
+    void inspectVehicle(uint32_t vehicleId);
+    void inspectPerson(uint32_t personId);
 
     // Build the tracked person's route geometry (vehicle legs follow the
     // network via trajectory segments; teleported legs are straight lines).
@@ -181,11 +195,24 @@ private:
     std::vector<MapWidget::ActivityMarker> buildActivityMarkers(
         uint32_t personId, int tripIndex = -1) const;
 
-    // Rebuild the heatmap submenu from the activity types the loaded scenario
+    // Rebuild the heatmap menu from the activity types the loaded scenario
     // actually contains. Types are scenario-defined, so they cannot be fixed.
     void populateHeatmapMenu();
 
-    void loadBinaryFiles();
+    // Read the run's cached network and vehicle index on a worker thread,
+    // with the transit schedule when the run comes from the cache. A card
+    // over the map shows the progress. applyLoadedFiles() finishes the load.
+    void loadBinaryFiles(bool fromCache);
+
+    // The files of a run, read on a worker thread by loadBinaryFiles()
+    struct LoadedFiles {
+        std::shared_ptr<NetworkIndex> network;
+        std::shared_ptr<VehicleIndex> vehicles;
+        std::unique_ptr<TransitScheduleParser::Result> transit;  // null: not read
+        QString error;  // empty when every file was read
+    };
+    // Put the files in place and set up the window for the new run
+    void applyLoadedFiles(LoadedFiles& files, bool fromCache, const QString& vidxPath);
 
     // Kick off the background per-link hourly volume scan for the scenario
     // that was just loaded, superseding any scan still running.
@@ -193,7 +220,6 @@ private:
     void startPreprocessing();
     void applyTransitData();
     void loadCachedCRS(const QString& crsPath);
-    void parseTransitOnly();
 
     // UI components
     MapWidget* mapWidget_;
@@ -201,10 +227,11 @@ private:
     InfoPanel* infoPanel_;
     QLabel* statusLabel_;
     QLabel* vehicleCountLabel_;
-    QLabel* zoomLabel_;
 
     // Data managers
-    std::unique_ptr<NetworkIndex> networkIndex_;
+    // shared_ptr, like vehicleIndex_: a density map worker keeps its own
+    // reference while a new scenario replaces this one
+    std::shared_ptr<NetworkIndex> networkIndex_;
     // shared_ptr, not unique_ptr: the background volume scan holds its own
     // reference for as long as it runs, so loading a new scenario replaces this
     // pointer instead of mutating an index a worker thread is reading.
@@ -228,7 +255,46 @@ private:
     QString transitSchedulePath_;
     QString cacheDirectory_;
 
-    // Menu actions
+    // File, navigation and playback actions
+    QAction* openFolderAction_ = nullptr;
+    QAction* openFilesAction_ = nullptr;
+    // Preprocess the open run again, in place of deleting .simvis_cache
+    QAction* rebuildCacheAction_ = nullptr;
+    // True while that runs. If it fails or is cancelled, the cache from
+    // before still loads, so the run does not go away.
+    bool rebuildingCache_ = false;
+    QAction* fitAction_ = nullptr;
+    QAction* zoomInAction_ = nullptr;
+    QAction* zoomOutAction_ = nullptr;
+    QAction* panModeAction_ = nullptr;
+    QAction* playPauseAction_ = nullptr;
+    QAction* goToStartAction_ = nullptr;
+    QAction* goToEndAction_ = nullptr;
+    QAction* findAction_ = nullptr;
+    QAction* exportPdfAction_ = nullptr;
+    QAction* exportPngAction_ = nullptr;
+    QAction* aboutAction_ = nullptr;
+    QAction* keyboardShortcutsAction_ = nullptr;
+    QAction* userGuideAction_ = nullptr;
+    QAction* reportProblemAction_ = nullptr;
+    // Made when the help is first opened
+    HelpWindow* helpWindow_ = nullptr;
+    // The Clear and Export buttons of the "Selected links" panel
+    QAction* clearSelectionAction_ = nullptr;
+    QAction* exportScenarioAction_ = nullptr;
+    // Playback speeds; the timeline keeps the current one
+    QMenu* speedMenu_ = nullptr;
+
+    // Menus of radio choices, shown as drop-down buttons on the ribbon
+    QMenu* vehicleShapeMenu_ = nullptr;
+    QMenu* vehicleSizeMenu_ = nullptr;
+    QMenu* vehicleColorMenu_ = nullptr;
+    QMenu* routeThicknessMenu_ = nullptr;
+    QMenu* tileSourceMenu_ = nullptr;
+
+    RibbonBar* ribbon_ = nullptr;
+
+    // Layer and vehicle actions
     QAction* showNodesAction_;
     QAction* showLinksAction_;
     QAction* showVehiclesAction_;
@@ -258,22 +324,23 @@ private:
     QAction* routeThicknessMediumAction_;
     QAction* routeThicknessThickAction_;
 
-    // Info panel action
+    // Side panel page actions (see updateSidePanelActions)
     QAction* showInfoPanelAction_;
+    QAction* showSelectedLinksAction_ = nullptr;
 
     // Counts actions
     QAction* loadCountsAction_;
     QAction* showCountsAction_;
 
-    // Recent folders submenu (rebuilt from QSettings on every change)
+    // Recent folders menu (rebuilt from QSettings on every change)
     QMenu* recentFoldersMenu_ = nullptr;
 
-    // Activity density heatmap submenu, filled in once a scenario is loaded
+    // Activity density heatmap menu, filled in once a scenario is loaded
     QMenu* heatmapMenu_ = nullptr;
     // The undirected graph the density engine works on. Built once per
     // scenario, because it
     // takes a moment and never changes while the scenario is loaded.
-    std::unique_ptr<NkdvNetwork> nkdvNetwork_;
+    std::shared_ptr<NkdvNetwork> nkdvNetwork_;
     // True while a density computation is running, so a second one cannot be
     // started on top of it.
     bool heatmapRunning_ = false;
@@ -304,6 +371,55 @@ private:
 
     // Clear everything that belongs to the scenario being replaced.
     void resetScenarioState();
+    // A background map needs the network's CRS. Turn it off when the scenario
+    // just loaded has none, so old tiles do not stay under a network they do
+    // not match.
+    void checkBackgroundMapCrs();
+
+    // Close the side panel and drop the inspected link with it
+    void hideSidePanel();
+    // Check the action of the page in front, uncheck the others
+    void updateSidePanelActions();
+
+    // Search results: a message under the search box, and the vehicle or
+    // person that was found
+    void showSearchMessage(const QString& message);
+    // Show a found vehicle or person where it is at the current time, and
+    // pan the map to it. The time does not change. The halo then follows the
+    // object as the time changes, until the user selects something else.
+    // False when the object has no place on the map.
+    bool showVehicle(uint32_t vehicleId);
+    bool showPerson(uint32_t personId);
+
+    // Where a found object is at a time: on a vehicle that is on the road
+    // (vehiclePlus1, VehicleId + 1), else at a fixed point (hasPoint).
+    struct FoundPlace {
+        uint32_t vehiclePlus1 = 0;
+        bool hasPoint = false;
+        float x = 0.0f;
+        float y = 0.0f;
+    };
+    // A vehicle off the road is where it stopped: at the activity of its
+    // driver when the driver left it there and is still at that activity,
+    // else at the end of its last link (start of its first link before it
+    // moves). A person aboard a vehicle on the road is on it; else at the
+    // activity they are at, or at the last one they left (also while they
+    // wait at a stop).
+    FoundPlace placeOfVehicle(uint32_t vehicleId, TimeMs now) const;
+    FoundPlace placeOfPerson(uint32_t personId, TimeMs now) const;
+    // The person's activity in progress at the time; when there is none and
+    // orLastEnded is set, the latest one that ended before it. Null: none.
+    const ActivityRecord* activityAt(uint32_t personId, TimeMs now,
+                                     bool orLastEnded) const;
+    // Map point of an activity: its x/y, or the middle of its link when the
+    // event had no x/y. False when neither is known.
+    bool activityPoint(const ActivityRecord& act, float& x, float& y) const;
+    // Put the halo where the found object is now: track its vehicle (as a
+    // click does) or set a fixed halo. panToHalo moves the map to a fixed
+    // halo; a tracked vehicle is centered by the tracking.
+    bool updateFoundHalo(bool panToHalo);
+    // Stop following the found object and remove its fixed halo
+    void endSearchFollow();
 
     // MATSim id string of a link (internal id), or the number if unknown.
     QString linkOriginalId(uint32_t linkId) const;
@@ -311,11 +427,19 @@ private:
     ScenarioPanel::LinkRow scenarioRow(uint32_t linkId) const;
     void zoomToLink(uint32_t linkId);
 
-    // "Selected links" panel in a dock on the right. Opens on the first
-    // Ctrl+click.
+    // The panel at the right of the map. Its pages are the info panel and the
+    // "Selected links" panel; the second opens on the first Ctrl+click.
+    SidePanel* sidePanel_ = nullptr;
+    // Card over the map while a run loads
+    LoadingIndicator* loadingIndicator_ = nullptr;
+    // Raised by every load; a load whose result arrives late is dropped
+    uint64_t loadGeneration_ = 0;
+    // MATSim id of the link inspected before a load, opened again after it
+    std::string carriedLinkId_;
+    int infoPage_ = 0;
+    int selectedLinksPage_ = 0;
     ScenarioPanel* scenarioPanel_ = nullptr;
-    QDockWidget* scenarioDock_ = nullptr;
-    QLineEdit* linkSearchEdit_ = nullptr;
+    QLineEdit* searchEdit_ = nullptr;
 
     // TAREEK experiment folder name of the loaded run: the folder that holds
     // the network file, or its parent when that folder is named "output".
@@ -388,6 +512,17 @@ private:
     // a different vehicle is selected.
     uint32_t routePersonPlus1_ = 0;
     uint32_t infoVehicleId_ = 0;
+    // The panel describes the person routePersonPlus1_ (found by the search),
+    // not the tracked vehicle. infoVehicleId_ is then their own car, or 0.
+    bool infoShowsPerson_ = false;
+
+    // The vehicle or person the search found and the halo follows (id + 1,
+    // 0 = none; at most one of the two is set)
+    uint32_t foundVehiclePlus1_ = 0;
+    uint32_t foundPersonPlus1_ = 0;
+    // Set while the search itself starts or stops tracking, so that
+    // onVehicleTrackingChanged does not take it as a click
+    bool searchTracking_ = false;
 };
 
 } // namespace simvis

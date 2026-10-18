@@ -16,7 +16,7 @@ namespace simvis {
 // Snapshot of everything the panel shows about a tracked vehicle.
 // Assembled by MainWindow from VehicleIndex/NetworkIndex/VehicleState.
 struct VehicleInfo {
-    uint32_t vehicleId = 0;
+    uint32_t vehicleId = 0;   // 0 = no vehicle: a person and their trips only
     QString vehicleName;      // original MATSim vehicle id string
     QString mode;             // "Car", "Bus", ...
     bool active = false;      // currently on the network
@@ -41,6 +41,11 @@ struct VehicleInfo {
     QString lineName;
     QString routeName;
     int passengerCount = -1;  // -1 = not a transit vehicle
+    struct Passenger {
+        uint32_t personId;    // internal id
+        QString name;         // original MATSim person id
+    };
+    std::vector<Passenger> passengers;  // aboard now, in boarding order
 };
 
 class InfoPanel : public QWidget {
@@ -84,13 +89,15 @@ signals:
     void stopClicked(uint32_t stopId);       // User clicked a stop name in the list
     void routeClicked(uint32_t lineId);      // User clicked a route name in the list
     void panToRequested(float x, float y);   // Request map to pan to coordinates
-    void closeRequested();                   // User clicked close button
     void showPersonRouteToggled(bool show);  // Show/hide full-day person route overlay
     void tripClicked(int tripIndex);         // User clicked a trip card (-1 = deselect)
+    void passengerClicked(uint32_t personId); // User clicked a passenger in the list
 
 private:
     void clearContent();
     QLabel* addHeader(const QString& text);
+    // A header with a button that copies an id (to paste in the search box)
+    QLabel* addHeader(const QString& text, const QString& copyId);
     QLabel* addBody(const QString& text);
     // A line of plain text qualifying the figures above it.
     QLabel* addCaption(const QString& text);
@@ -101,7 +108,6 @@ private:
     QScrollArea* scrollArea_;
     QWidget* contentWidget_;
     QVBoxLayout* contentLayout_;
-    QPushButton* closeButton_;
     QLabel* titleLabel_;
 
     // Whether the person-route overlay is currently shown (button label state).
@@ -112,11 +118,19 @@ private:
     // Reset alongside personRouteShown_ on tracking changes.
     int selectedTripIndex_ = -1;
 
+    // The panel is rebuilt each second of simulated time while a vehicle is
+    // tracked. The passenger list keeps its scroll position across rebuilds
+    // of the same vehicle.
+    uint32_t passengerListVehicle_ = 0;
+    int passengerListScroll_ = 0;
+
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 public:
     void resetPersonRouteState() { personRouteShown_ = false; selectedTripIndex_ = -1; }
+    // Show the route button as "Hide" when MainWindow shows the route itself
+    void setPersonRouteShown(bool shown) { personRouteShown_ = shown; }
 };
 
 } // namespace simvis

@@ -49,6 +49,8 @@ void MapWidget::setNetworkIndex(NetworkIndex* index) {
 }
 
 void MapWidget::setVehicleIndex(VehicleIndex* index) {
+    // A tracked vehicle of the old scenario does not exist in the new one
+    stopTracking();
     vehicleIndex_ = index;
     if (vehicleRenderer_) {
         vehicleRenderer_->setVehicleIndex(index);
@@ -57,7 +59,9 @@ void MapWidget::setVehicleIndex(VehicleIndex* index) {
     if (index) {
         minTime_ = VehicleIndex::toSeconds(index->minTime());
         maxTime_ = VehicleIndex::toSeconds(index->maxTime());
-        simulationTime_ = minTime_;
+        // Place the new scenario's vehicles at its start time now, instead of
+        // when the time next changes
+        setSimulationTime(minTime_);
     }
 
     update();
@@ -120,9 +124,11 @@ void MapWidget::setSimulationTime(float time) {
         if (trackedVehicleId_ != 0) {
             const auto* state = vehicleRenderer_->getVehicleState(trackedVehicleId_);
             if (state) {
-                centerX_ = state->x;
-                centerY_ = state->y;
-                updateView();
+                if (followTracked_) {
+                    centerX_ = state->x;
+                    centerY_ = state->y;
+                    updateView();
+                }
             } else {
                 // Vehicle no longer exists - stop tracking
                 stopTracking();
@@ -323,6 +329,7 @@ void MapWidget::setTransitHighlightedLine(uint32_t lineId) {
 void MapWidget::setTrackedVehicle(uint32_t vehicleId) {
     if (trackedVehicleId_ != vehicleId) {
         trackedVehicleId_ = vehicleId;
+        followTracked_ = true;
 
         // Update renderer's tracked vehicle for highlighting
         if (vehicleRenderer_) {
@@ -355,11 +362,36 @@ void MapWidget::updateVehicleHalo() {
             return;
         }
     }
+    if (hasHaloPosition_) {
+        vehicleHaloRenderer_->setPositions({{haloX_, haloY_}});
+        vehicleHaloRenderer_->setVisible(true);
+        return;
+    }
     vehicleHaloRenderer_->setVisible(false);
 }
 
 void MapWidget::stopTracking() {
     setTrackedVehicle(0);
+}
+
+void MapWidget::setPanMode(bool on) {
+    panMode_ = on;
+    setCursor(on ? Qt::OpenHandCursor : Qt::ArrowCursor);
+}
+
+void MapWidget::setHaloPosition(float worldX, float worldY) {
+    hasHaloPosition_ = true;
+    haloX_ = worldX;
+    haloY_ = worldY;
+    updateVehicleHalo();
+    update();
+}
+
+void MapWidget::clearHaloPosition() {
+    if (!hasHaloPosition_) return;
+    hasHaloPosition_ = false;
+    updateVehicleHalo();
+    update();
 }
 
 const VehicleState* MapWidget::vehicleState(uint32_t vehicleId) const {
@@ -498,6 +530,7 @@ void MapWidget::clearAllHighlights() {
     if (transitRouteRenderer_) transitRouteRenderer_->setHighlightedLine(0);
     // Vehicle tracking + its halo
     if (trackedVehicleId_ != 0) stopTracking();
+    clearHaloPosition();
     update();
 }
 
@@ -788,7 +821,7 @@ void MapWidget::drawEmptyState(QPainter& painter) {
     painter.setPen(QColor(130, 130, 140));
     painter.drawText(QRect(area.left(), area.center().y() + 2, area.width(), 22),
                      Qt::AlignHCenter | Qt::AlignVCenter,
-                     tr("or use File > Open Folder"));
+                     tr("or use Home > Open Folder"));
     painter.drawText(QRect(area.left(), area.center().y() + 26, area.width(), 22),
                      Qt::AlignHCenter | Qt::AlignVCenter,
                      tr("The network, events and transit files are found for you."));
@@ -893,6 +926,14 @@ QPointF MapWidget::screenToWorld(const QPoint& screenPos) const {
 
 void MapWidget::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
+        if (panMode_) {
+            followTracked_ = false;
+            isDragging_ = true;
+            lastMousePos_ = event->pos();
+            setCursor(Qt::ClosedHandCursor);
+            return;
+        }
+
         QPointF worldPos = screenToWorld(event->pos());
         double hitRadius = 20.0 / zoom_;
 
@@ -971,6 +1012,7 @@ void MapWidget::mousePressEvent(QMouseEvent* event) {
         if (trackedVehicleId_ != 0) {
             stopTracking();
         }
+        emit emptyMapClicked();
         // Clear route highlight when clicking empty space
         if (transitRouteRenderer_) {
             transitRouteRenderer_->setHighlightedLine(0);
@@ -1003,7 +1045,7 @@ void MapWidget::mouseMoveEvent(QMouseEvent* event) {
 void MapWidget::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
         isDragging_ = false;
-        setCursor(Qt::ArrowCursor);
+        setCursor(panMode_ ? Qt::OpenHandCursor : Qt::ArrowCursor);
     }
 }
 

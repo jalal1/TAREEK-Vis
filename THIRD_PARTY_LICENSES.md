@@ -73,13 +73,34 @@ restrictive redistribution is needed.
 
 ---
 
+## Lucide icons
+
+- **License**: ISC
+- **Version**: 0.469.0 (`lucide-static` package)
+- **Website**: https://lucide.dev/
+- **Copyright**: Copyright (c) for portions of Lucide are held by Cole Bemis
+  2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are
+  held by Lucide Contributors 2022.
+- **Usage**: Ribbon and info panel button icons. The SVG files are in
+  `src/ui/ribbon/icons/svg/` without changes; the app ships PNG files made
+  from them (`src/ui/ribbon/icons/render_icons.mjs`). The full license text is
+  in `src/ui/ribbon/icons/LICENSE`.
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+---
+
 # Background Map Tile Services
 
 The optional background map layer (View → Background Map) streams raster map
 tiles over HTTPS from the third-party services listed below. These tiles are
 **not** bundled with or redistributed by TAREEK-Vis; they are requested
-directly by the end user's machine when a background layer is enabled, and are
-cached only in memory for the duration of the session.
+directly by the end user's machine when a background layer is enabled. Tiles
+are kept in a local disk cache (at most 300 MB) at
+`%LOCALAPPDATA%\TAREEK-Vis\TAREEK-Vis\cache\tiles`, so that the same view is
+not downloaded again. The installer removes this cache on uninstall.
 
 Each service requires attribution whenever its map imagery is displayed,
 reproduced, or published. If you publish figures, screenshots, or recorded

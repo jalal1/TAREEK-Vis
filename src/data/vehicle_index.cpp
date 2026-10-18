@@ -110,15 +110,22 @@ void VehicleIndex::buildTripLookups() {
         transitServiceLookup_.emplace(transitServices_[i].vehicleId, i);
     }
 
-    // Occupancy from vehicle trips: person is aboard [departTimeMs, arriveTimeMs)
+    // Occupancy from vehicle trips: person is aboard [boardTimeMs, arriveTimeMs).
+    // Not from the departure: on a pt leg that would count the wait at the stop.
     occupancy_.clear();
     for (uint32_t personId = 0; personId < personTrips_.size(); ++personId) {
         for (const auto& trip : personTrips_[personId]) {
             if (trip.vehicleId == 0) continue;  // teleported
             if (trip.arriveTimeMs == TRIP_NO_TIME) continue;  // stuck
+            const TimeMs board = trip.boardTimeMs != TRIP_NO_TIME
+                ? trip.boardTimeMs : trip.departTimeMs;
             occupancy_[trip.vehicleId - 1].push_back(
-                {trip.departTimeMs, trip.arriveTimeMs, personId});
+                {board, trip.arriveTimeMs, personId});
         }
+    }
+    for (auto& [vehicleId, list] : occupancy_) {
+        std::sort(list.begin(), list.end(),
+            [](const Occupancy& a, const Occupancy& b) { return a.enterMs < b.enterMs; });
     }
 
     // Per-person activity index. activities_ is in event order, so appending as
@@ -151,14 +158,14 @@ const VehicleIndex::TransitService* VehicleIndex::transitServiceInfo(VehicleId i
     return &transitServices_[it->second];
 }
 
-int VehicleIndex::passengersAboard(VehicleId id, TimeMs time) const {
+std::vector<uint32_t> VehicleIndex::personsAboard(VehicleId id, TimeMs time) const {
+    std::vector<uint32_t> persons;
     auto it = occupancy_.find(id);
-    if (it == occupancy_.end()) return 0;
-    int count = 0;
+    if (it == occupancy_.end()) return persons;
     for (const auto& occ : it->second) {
-        if (time >= occ.enterMs && time < occ.leaveMs) ++count;
+        if (time >= occ.enterMs && time < occ.leaveMs) persons.push_back(occ.personId);
     }
-    return count;
+    return persons;
 }
 
 // --- String lookups ---
@@ -166,6 +173,18 @@ int VehicleIndex::passengersAboard(VehicleId id, TimeMs time) const {
 static QString internedOrEmpty(const StringInterner& interner, uint32_t id) {
     if (id >= interner.size()) return QString();
     return QString::fromStdString(interner.strings()[id]);
+}
+
+uint32_t VehicleIndex::findVehicleByOriginalId(const std::string& id) const {
+    if (!vehicleIdStrings_.hasString(id)) return UINT32_MAX;
+    const uint32_t vid = vehicleIdStrings_.getId(id);
+    return vid < vehicles_.size() ? vid : UINT32_MAX;
+}
+
+uint32_t VehicleIndex::findPersonByOriginalId(const std::string& id) const {
+    if (!personIdStrings_.hasString(id)) return UINT32_MAX;
+    const uint32_t pid = personIdStrings_.getId(id);
+    return pid < personTrips_.size() ? pid : UINT32_MAX;
 }
 
 QString VehicleIndex::vehicleIdString(VehicleId id) const {

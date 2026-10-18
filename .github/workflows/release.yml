@@ -53,6 +53,8 @@ jobs:
             exit 1
           fi
           cp "$src" ffmpeg/ffmpeg.exe
+          # This build is GPL. Its license text must go with every copy.
+          cp "$(dirname "$(dirname "$src")")/LICENSE" ffmpeg/LICENSE.txt
           ./ffmpeg/ffmpeg.exe -version | head -1
 
       - name: Assemble redistributable folder
@@ -62,7 +64,13 @@ jobs:
           DIST_DIR=dist/TAREEK-Vis
           mkdir -p "$DIST_DIR"
           cp build/TAREEK-Vis.exe "$DIST_DIR/"
-          windeployqt6.exe --release --no-translations "$DIST_DIR/TAREEK-Vis.exe"
+          # The About box points to THIRD_PARTY_LICENSES.md.
+          cp LICENSE THIRD_PARTY_LICENSES.md "$DIST_DIR/"
+          # Same plugin selection as deploy.bat; the reasons are listed there.
+          windeployqt6.exe --release --no-translations --no-system-d3d-compiler --no-opengl-sw \
+            --skip-plugin-types generic \
+            --exclude-plugins qgif,qico,qglib,qcertonlybackend \
+            "$DIST_DIR/TAREEK-Vis.exe"
 
           # Resolve remaining UCRT64 runtime deps transitively (ICU, GCC
           # runtime, zlib, etc.) - windeployqt only handles Qt's own DLLs,
@@ -84,7 +92,15 @@ jobs:
           cd -
 
           mkdir -p "$DIST_DIR/ffmpeg"
-          cp ffmpeg/ffmpeg.exe "$DIST_DIR/ffmpeg/"
+          cp ffmpeg/ffmpeg.exe ffmpeg/LICENSE.txt "$DIST_DIR/ffmpeg/"
+
+          for f in libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll zlib1.dll \
+                   LICENSE THIRD_PARTY_LICENSES.md; do
+            if [ ! -f "$DIST_DIR/$f" ]; then
+              echo "::error::$f missing from dist"
+              exit 1
+            fi
+          done
 
           # Video recording resolves ffmpeg next to the executable, so a build
           # that ships without it looks fine until a user hits Record.

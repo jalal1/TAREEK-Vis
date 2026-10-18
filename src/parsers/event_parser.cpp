@@ -140,6 +140,7 @@ EventParser::StreamResult EventParser::streamProcessEvents(
             LinkId departLinkId = 0;
             uint16_t legModeId = 0;
             uint32_t currentVehicle = 0;           // vehicleId+1 while in a vehicle
+            TimeMs boardTimeMs = TRIP_NO_TIME;     // when it entered currentVehicle
             bool legOpen = false;
             bool awaitingActStart = false;         // last emitted trip wants toActTypeId
 
@@ -293,6 +294,7 @@ EventParser::StreamResult EventParser::streamProcessEvents(
                         ? 0
                         : static_cast<uint16_t>(vidx.legModeStrings_.intern(modeStr));
                     ps.currentVehicle = 0;
+                    ps.boardTimeMs = TRIP_NO_TIME;
                     ps.legOpen = true;
                     ps.awaitingActStart = false;
                     continue;
@@ -310,6 +312,7 @@ EventParser::StreamResult EventParser::streamProcessEvents(
                     PersonTrip trip{};
                     trip.departTimeMs = ps.departTimeMs;
                     trip.arriveTimeMs = eventTimeMs;
+                    trip.boardTimeMs = ps.boardTimeMs;
                     trip.fromLinkId = ps.departLinkId;
                     trip.toLinkId = TRIP_NO_LINK;
                     if (!linkStr.empty()) {
@@ -384,7 +387,10 @@ EventParser::StreamResult EventParser::streamProcessEvents(
                     uint32_t vehId = result.vehicleIds.intern(vehStr);
                     growDriverArray(result.vehicleIds.size());
                     auto& ps = personStates[personId];
-                    if (ps.legOpen) ps.currentVehicle = vehId + 1;
+                    if (ps.legOpen) {
+                        ps.currentVehicle = vehId + 1;
+                        ps.boardTimeMs = eventTimeMs;
+                    }
                     // First person to enter is the driver (transit drivers were
                     // already set by TransitDriverStarts; don't overwrite)
                     if (vidx.driverOfVehicle_[vehId] == 0) {
@@ -539,6 +545,7 @@ EventParser::StreamResult EventParser::streamProcessEvents(
             PersonTrip trip{};
             trip.departTimeMs = ps.departTimeMs;
             trip.arriveTimeMs = TRIP_NO_TIME;   // never arrived
+            trip.boardTimeMs = ps.boardTimeMs;
             trip.fromLinkId = ps.departLinkId;
             trip.toLinkId = TRIP_NO_LINK;
             trip.vehicleId = ps.currentVehicle;

@@ -30,6 +30,9 @@ struct VehicleTrajectory {
 struct PersonTrip {
     TimeMs departTimeMs;
     TimeMs arriveTimeMs;      // UINT32_MAX = never arrived (stuck agent)
+    // v5: when the person entered the leg's vehicle. Later than the departure
+    // on a pt leg, by the wait at the stop. UINT32_MAX = no vehicle.
+    TimeMs boardTimeMs;
     LinkId fromLinkId;
     LinkId toLinkId;          // UINT32_MAX = unknown
     uint32_t vehicleId;       // internal VehicleId + 1; 0 = teleported / no vehicle
@@ -38,7 +41,7 @@ struct PersonTrip {
     uint16_t toActTypeId;     // UINT16_MAX = none
     uint16_t flags;           // bit0: teleported, bit1: transit rider; rest reserved
 };
-static_assert(sizeof(PersonTrip) == 28, "PersonTrip must be 28 bytes");
+static_assert(sizeof(PersonTrip) == 32, "PersonTrip must be 32 bytes");
 
 constexpr uint16_t TRIP_NO_ACT   = 0xFFFF;
 constexpr TimeMs   TRIP_NO_TIME  = 0xFFFFFFFF;
@@ -70,7 +73,7 @@ constexpr TimeMs   ACT_NO_TIME = 0xFFFFFFFF;
 // Set when x/y were absent from the event and we fell back to link geometry.
 constexpr uint16_t ACT_FLAG_DERIVED_COORD = 1 << 0;
 
-// Binary file header for .vidx v4 files (112 bytes: 6xu32 + 4xu64 + 2xu32 + 4xu64
+// Binary file header for .vidx v4 and v5 files (112 bytes: 6xu32 + 4xu64 + 2xu32 + 4xu64
 // + 1xu32 + 1xu32 + 1xu64, naturally packed — u64 fields land on 8-byte
 // boundaries with no padding)
 struct VehicleIndexHeader {
@@ -97,9 +100,10 @@ struct VehicleIndexHeader {
 static_assert(sizeof(VehicleIndexHeader) == 112, "VehicleIndexHeader must be 112 bytes");
 
 constexpr uint32_t VIDX_FILE_MAGIC   = 0x56494458;  // "VIDX"
-// v4 adds the activity table (ActivityRecord). A version bump forces a one-time
-// automatic re-preprocess, which is how older caches are retired.
-constexpr uint32_t VIDX_FILE_VERSION = 4;
+// v4 adds the activity table (ActivityRecord); v5 adds PersonTrip::boardTimeMs.
+// A version bump forces a one-time automatic re-preprocess, which is how older
+// caches are retired.
+constexpr uint32_t VIDX_FILE_VERSION = 5;
 
 // Pre-computed per-vehicle index for fast active-vehicle queries
 class VehicleIndex {
@@ -157,6 +161,11 @@ public:
     // Driver of a vehicle: personId + 1, or 0 if unknown
     uint32_t vehicleDriver(VehicleId id) const;
 
+    // Internal id of a vehicle or a person from its MATSim id, or UINT32_MAX
+    // when the run has no such id (used by the search box)
+    uint32_t findVehicleByOriginalId(const std::string& id) const;
+    uint32_t findPersonByOriginalId(const std::string& id) const;
+
     // Transit service info for a transit vehicle (nullptr if not a transit vehicle)
     struct TransitService {
         uint32_t vehicleId;
@@ -165,9 +174,9 @@ public:
     };
     const TransitService* transitServiceInfo(VehicleId id) const;
 
-    // Passengers aboard a vehicle at a given time (excludes nobody; caller
-    // subtracts the driver for transit vehicles if desired)
-    int passengersAboard(VehicleId id, TimeMs time) const;
+    // Persons aboard a vehicle at a given time, in boarding order. The driver
+    // is one of them; the caller leaves them out when it wants passengers.
+    std::vector<uint32_t> personsAboard(VehicleId id, TimeMs time) const;
 
     // --- Activity queries (v4) ---
 
@@ -226,7 +235,7 @@ private:
     // vehicleId -> index into transitServices_
     std::unordered_map<uint32_t, size_t> transitServiceLookup_;
 
-    // vehicleId -> intervals a person is aboard (from vehicle trips)
+    // vehicleId -> intervals a person is aboard [board, arrive), from vehicle trips
     struct Occupancy { TimeMs enterMs; TimeMs leaveMs; uint32_t personId; };
     std::unordered_map<uint32_t, std::vector<Occupancy>> occupancy_;
 

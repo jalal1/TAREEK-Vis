@@ -95,8 +95,26 @@ you change a feature that users see, also update the help (see
    ZIP is also attached.
 2. Run the installer. It does not need administrator rights.
 
-For more information, see [Get started](help/getting-started.md). The rest of
-this page is for developers.
+For more information, see [Get started](help/getting-started.md).
+
+## Try it with a sample run
+
+If you do not have a MATSim run, use our sample run of Madison, Wisconsin
+(about 180,000 agents, 500 MB). We made it with
+[TAREEK](https://github.com/jalal1/TAREEK).
+
+1. Download
+   [tareek-vis-sample-madison.zip](https://huggingface.co/datasets/Jalalk1/tareek-vis-sample-madison/resolve/main/tareek-vis-sample-madison.zip?download=true)
+   from [Hugging Face](https://huggingface.co/datasets/Jalalk1/tareek-vis-sample-madison).
+2. Unzip it.
+3. Drag the `tareek-vis-sample-madison` folder onto the TAREEK-Vis window.
+4. Wait while TAREEK-Vis prepares the run (first time only), then press
+   **Space** to play.
+
+The folder also has a traffic counts file. To load it, see
+[Get started](help/getting-started.md#try-it-with-a-sample-run).
+
+The rest of this page is for developers.
 
 ## Requirements
 

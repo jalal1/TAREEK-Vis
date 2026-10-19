@@ -20,6 +20,29 @@ To use TAREEK-Vis without an installation, download
 
 For more information, see [Open a simulation run](open-a-run.md).
 
+## Try it with a sample run
+
+If you do not have a MATSim run, use our sample run. It shows Dane County
+(Madison) in Wisconsin, with about 180,000 agents. The agents are
+synthetic. They are not real persons.
+
+1. Download `tareek-vis-sample-madison.zip` (500 MB) from
+   [Hugging Face](https://huggingface.co/datasets/Jalalk1/tareek-vis-sample-madison).
+2. Unzip it.
+3. Drag the `tareek-vis-sample-madison` folder onto the TAREEK-Vis
+   window. Or click **Home > Open Folder** and select the folder.
+4. Wait while TAREEK-Vis prepares the run. This can take some minutes, but
+   only the first time.
+5. Press **Space** to play the simulation.
+
+To compare the simulation with traffic counts:
+
+1. Click **Home > Load Counts**.
+2. Select `counts.xml` in the sample folder.
+3. Type `4` for the `countsScaleFactor`.
+
+For more information, see [Compare with traffic counts](counts.md).
+
 ## Parts of the window
 
 ![The TAREEK-Vis window](images/window.png)

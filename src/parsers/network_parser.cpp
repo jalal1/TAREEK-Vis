@@ -113,6 +113,9 @@ NetworkParser::Result NetworkParser::parseGzipFile(const std::string& path, Prog
                 std::string id = getAttr(line, "id");
                 std::string xStr = getAttr(line, "x");
                 std::string yStr = getAttr(line, "y");
+                // Optional height. The leading space keeps a longer name that
+                // ends in z from matching.
+                std::string zStr = getAttr(line, " z");
 
                 if (!id.empty() && !xStr.empty() && !yStr.empty()) {
                     double x = std::stod(xStr);
@@ -122,7 +125,7 @@ NetworkParser::Result NetworkParser::parseGzipFile(const std::string& path, Prog
                     rec.id = result.nodeIds.intern(id);
                     rec.x = static_cast<float>(x);
                     rec.y = static_cast<float>(y);
-                    rec.padding = 0;
+                    rec.z = zStr.empty() ? 0.0f : static_cast<float>(std::stod(zStr));
 
                     result.nodes.push_back(rec);
                     result.bounds.expand(x, y);

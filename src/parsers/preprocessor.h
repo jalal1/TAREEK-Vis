@@ -59,6 +59,11 @@ public slots:
     void cancel();
 
 private:
+    // Sets the mode of each non-transit vehicle (core/modes.h)
+    void classifyVehicleModes();
+    // Sets the vertiport position of each hold event from its flight
+    void placeHolds();
+
     QString networkXmlPath_;
     QString eventsXmlPath_;
     QString transitSchedulePath_;

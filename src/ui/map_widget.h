@@ -17,6 +17,7 @@ class QPainter;
 #include "renderer/halo_renderer.h"
 #include "renderer/tile_renderer.h"
 #include "renderer/heatmap_renderer.h"
+#include "renderer/air_overlay_renderer.h"
 #include "data/network_index.h"
 #include "data/vehicle_index.h"
 
@@ -57,10 +58,25 @@ public:
     void setShowNodes(bool show);
     void setShowLinks(bool show);
     void setShowVehicles(bool show);
-    void setShowCars(bool show);
-    void setShowBuses(bool show);
-    void setShowTrams(bool show);
-    void setShowRailVehicles(bool show);
+    // Show or hide the vehicles of one mode (mode id, core/modes.h)
+    void setModeVisible(uint8_t modeId, bool show);
+
+    // Air view (ribbon tab Air). hasAirVehicles: the run has a vehicle of a
+    // 3D mode. airTopHeight: the highest node of the network, m.
+    bool hasAirVehicles() const { return hasAirVehicles_; }
+    float airTopHeight() const { return airTopHeight_; }
+    void setShowAirLinks(bool show);
+    void setShowVertiports(bool show);
+    void setShowTrails(bool show);
+    void setAltitudeLift(float pxPerMetre);
+    void setAltitudeBand(float minZ, float maxZ);
+    void setShowLosses(bool show);
+    void setShowHolds(bool show);
+    // Aircraft on the map, losses and holds now (status bar)
+    struct AirStatus { size_t aircraft = 0; size_t losses = 0; size_t holds = 0; };
+    AirStatus airStatus() const;
+    // Height colour key, bottom right, while aircraft are coloured by height
+    void drawAltitudeLegend(QPainter& painter, const QSize& deviceSize, qreal scale);
 
     // Vehicle rendering options
     void setVehicleSize(float size);
@@ -90,9 +106,9 @@ public:
     void setShowCounts(bool show);
 
     // Vehicle tracking
-    void setTrackedVehicle(uint32_t vehicleId);  // 0 to stop tracking
+    void setTrackedVehicle(uint32_t vehicleId);  // kNoVehicle to stop tracking
     uint32_t trackedVehicle() const { return trackedVehicleId_; }
-    bool isTrackingVehicle() const { return trackedVehicleId_ != 0; }
+    bool isTrackingVehicle() const { return trackedVehicleId_ != kNoVehicle; }
     void stopTracking();
     // Pan mode: a left-button press never selects. A drag moves the map, and
     // the camera stops following the tracked vehicle; the vehicle stays
@@ -150,6 +166,21 @@ public:
     // its size of space around it.
     void zoomToBounds(const BoundingBox& box, double margin = 1.0);
 
+    // Center on a world point at a scale in metres per screen pixel
+    void setView(double worldX, double worldY, double metresPerPixel);
+    double metresPerPixel() const { return 1.0 / zoom_; }
+    double viewCenterX() const { return centerX_; }
+    double viewCenterY() const { return centerY_; }
+
+    // Play `frames` frames off-screen from `startTime`, `step` seconds apart,
+    // and time the update and the render of each (scene capture, VIS-0)
+    struct FrameTiming {
+        std::vector<double> updateMs;
+        std::vector<double> renderMs;
+        size_t activeVehicles = 0;
+    };
+    FrameTiming measureFrames(float startTime, int frames, float step);
+
     // Video recording support
     void setVideoRecorder(VideoRecorder* recorder);
     VideoRecorder* videoRecorder() const { return videoRecorder_; }
@@ -170,7 +201,7 @@ signals:
     void simulationTimeChanged(float time);
     void viewChanged();
     void activeVehicleCountChanged(size_t count);
-    void vehicleTrackingChanged(uint32_t vehicleId);  // 0 when tracking stopped
+    void vehicleTrackingChanged(uint32_t vehicleId);  // kNoVehicle when tracking stopped
     void transitStopClicked(int stopIndex);            // stop index in transit data
     void transitRouteClicked(uint32_t lineId);         // transit line ID
     void countLinkClicked(uint32_t linkId);            // count link ID
@@ -196,6 +227,10 @@ private:
     void updateView();
     void updateVehicleHalo();  // sync halo to the tracked vehicle or the fixed point
 
+    // The GL layers in draw order. paintGL, renderToImage and measureFrames
+    // all use it, so the three always draw the same picture.
+    void drawLayers();
+
     // Shown until a scenario is loaded, so the first window is not a blank
     // rectangle with no indication of what to do next
     void drawEmptyState(QPainter& painter);
@@ -218,6 +253,7 @@ private:
     std::unique_ptr<PersonRouteRenderer> personRouteRenderer_;
     std::unique_ptr<PersonRouteRenderer> selectionRenderer_;  // red scenario links
     std::unique_ptr<HeatmapRenderer> heatmapRenderer_;
+    std::unique_ptr<AirOverlayRenderer> airOverlayRenderer_;
     std::unique_ptr<HaloRenderer> vehicleHaloRenderer_;  // cyan ring on tracked vehicle
     std::unique_ptr<HaloRenderer> countsHaloRenderer_;   // cyan rings on count stations
 
@@ -263,8 +299,21 @@ private:
     bool showLinks_ = true;
     bool showVehicles_ = true;
 
+    // Air view settings, kept here so that they survive initializeGL
+    bool hasAirVehicles_ = false;
+    float airTopHeight_ = 0.0f;
+    bool showAirLinks_ = false;
+    bool showVertiports_ = true;
+    bool showTrails_ = true;
+    bool showLosses_ = true;
+    bool showHolds_ = true;
+    float altitudeLift_ = 0.04f;  // px per m (Medium)
+    float bandMin_ = -1e9f;
+    float bandMax_ = 1e9f;
+    void applyAirSettings();
+
     // Vehicle tracking
-    uint32_t trackedVehicleId_ = 0;  // 0 = not tracking any vehicle
+    uint32_t trackedVehicleId_ = kNoVehicle;  // kNoVehicle = not tracking
     // The camera follows the tracked vehicle; off after a drag in pan mode
     bool followTracked_ = true;
     bool panMode_ = false;

@@ -2,6 +2,7 @@
 #include "core/video_recorder.h"
 #include "core/logger.h"
 #include "renderer/heatmap_palette.h"
+#include "core/modes.h"
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QOpenGLFramebufferObject>
@@ -44,7 +45,87 @@ void MapWidget::setNetworkIndex(NetworkIndex* index) {
     if (transitRouteRenderer_) {
         transitRouteRenderer_->setNetworkIndex(index);
     }
+    // Top of the height colour ramp: the highest node
+    airTopHeight_ = 0.0f;
+    if (index) {
+        for (const NodeRecord& node : index->allNodes())
+            airTopHeight_ = std::max(airTopHeight_, node.z);
+    }
+    if (airOverlayRenderer_) airOverlayRenderer_->setNetworkIndex(index);
+    applyAirSettings();
     fitToNetwork();
+    update();
+}
+
+void MapWidget::applyAirSettings() {
+    if (vehicleRenderer_) {
+        vehicleRenderer_->setLiftPxPerMetre(altitudeLift_);
+        vehicleRenderer_->setShowTrails(showTrails_);
+        vehicleRenderer_->setAltitudeBand(bandMin_, bandMax_);
+        vehicleRenderer_->setAltitudeTop(airTopHeight_);
+    }
+    if (networkRenderer_) {
+        networkRenderer_->setShowAirLinks(showAirLinks_);
+        networkRenderer_->setLiftPxPerMetre(altitudeLift_);
+    }
+    if (airOverlayRenderer_) {
+        airOverlayRenderer_->setShowVertiports(showVertiports_);
+        airOverlayRenderer_->setShowLosses(showLosses_);
+        airOverlayRenderer_->setShowHolds(showHolds_);
+    }
+}
+
+void MapWidget::setShowLosses(bool show) {
+    showLosses_ = show;
+    applyAirSettings();
+    update();
+}
+
+void MapWidget::setShowHolds(bool show) {
+    showHolds_ = show;
+    applyAirSettings();
+    update();
+}
+
+MapWidget::AirStatus MapWidget::airStatus() const {
+    AirStatus status;
+    if (vehicleRenderer_) status.aircraft = vehicleRenderer_->activeAirCount();
+    if (airOverlayRenderer_) {
+        status.losses = airOverlayRenderer_->activeLossCount();
+        status.holds = airOverlayRenderer_->activeHoldCount();
+    }
+    return status;
+}
+
+void MapWidget::setShowAirLinks(bool show) {
+    showAirLinks_ = show;
+    applyAirSettings();
+    update();
+}
+
+void MapWidget::setShowVertiports(bool show) {
+    showVertiports_ = show;
+    applyAirSettings();
+    update();
+}
+
+void MapWidget::setShowTrails(bool show) {
+    showTrails_ = show;
+    applyAirSettings();
+    update();
+}
+
+void MapWidget::setAltitudeLift(float pxPerMetre) {
+    altitudeLift_ = pxPerMetre;
+    applyAirSettings();
+    updateVehicleHalo();
+    update();
+}
+
+void MapWidget::setAltitudeBand(float minZ, float maxZ) {
+    bandMin_ = minZ;
+    bandMax_ = maxZ;
+    applyAirSettings();
     update();
 }
 
@@ -54,6 +135,13 @@ void MapWidget::setVehicleIndex(VehicleIndex* index) {
     vehicleIndex_ = index;
     if (vehicleRenderer_) {
         vehicleRenderer_->setVehicleIndex(index);
+    }
+    if (airOverlayRenderer_) airOverlayRenderer_->setVehicleIndex(index);
+    hasAirVehicles_ = false;
+    if (index) {
+        for (uint8_t id : index->vehicleModes_) {
+            if (modes::get(id).is3D) { hasAirVehicles_ = true; break; }
+        }
     }
 
     if (index) {
@@ -118,10 +206,11 @@ void MapWidget::setSimulationTime(float time) {
 
     if (vehicleRenderer_) {
         vehicleRenderer_->updateTime(simulationTime_);
+        if (airOverlayRenderer_) airOverlayRenderer_->updateTime(simulationTime_);
         emit activeVehicleCountChanged(vehicleRenderer_->activeVehicleCount());
 
         // Update camera to follow tracked vehicle
-        if (trackedVehicleId_ != 0) {
+        if (trackedVehicleId_ != kNoVehicle) {
             const auto* state = vehicleRenderer_->getVehicleState(trackedVehicleId_);
             if (state) {
                 if (followTracked_) {
@@ -178,23 +267,8 @@ void MapWidget::setShowVehicles(bool show) {
     update();
 }
 
-void MapWidget::setShowCars(bool show) {
-    if (vehicleRenderer_) vehicleRenderer_->setShowCars(show);
-    update();
-}
-
-void MapWidget::setShowBuses(bool show) {
-    if (vehicleRenderer_) vehicleRenderer_->setShowBuses(show);
-    update();
-}
-
-void MapWidget::setShowTrams(bool show) {
-    if (vehicleRenderer_) vehicleRenderer_->setShowTrams(show);
-    update();
-}
-
-void MapWidget::setShowRailVehicles(bool show) {
-    if (vehicleRenderer_) vehicleRenderer_->setShowRail(show);
+void MapWidget::setModeVisible(uint8_t modeId, bool show) {
+    if (vehicleRenderer_) vehicleRenderer_->setModeVisible(modeId, show);
     update();
 }
 
@@ -339,7 +413,7 @@ void MapWidget::setTrackedVehicle(uint32_t vehicleId) {
         emit vehicleTrackingChanged(vehicleId);
 
         // Immediately center on vehicle if tracking started
-        if (vehicleId != 0 && vehicleRenderer_) {
+        if (vehicleId != kNoVehicle && vehicleRenderer_) {
             const auto* state = vehicleRenderer_->getVehicleState(vehicleId);
             if (state) {
                 centerX_ = state->x;
@@ -354,10 +428,12 @@ void MapWidget::setTrackedVehicle(uint32_t vehicleId) {
 
 void MapWidget::updateVehicleHalo() {
     if (!vehicleHaloRenderer_) return;
-    if (trackedVehicleId_ != 0 && vehicleRenderer_) {
+    if (trackedVehicleId_ != kNoVehicle && vehicleRenderer_) {
         const auto* state = vehicleRenderer_->getVehicleState(trackedVehicleId_);
         if (state) {
-            vehicleHaloRenderer_->setPositions({{state->x, state->y}});
+            const Point2D shown = vehicleRenderer_->displayPosition(*state);
+            vehicleHaloRenderer_->setPositions({{static_cast<float>(shown.x),
+                                                 static_cast<float>(shown.y)}});
             vehicleHaloRenderer_->setVisible(true);
             return;
         }
@@ -371,7 +447,7 @@ void MapWidget::updateVehicleHalo() {
 }
 
 void MapWidget::stopTracking() {
-    setTrackedVehicle(0);
+    setTrackedVehicle(kNoVehicle);
 }
 
 void MapWidget::setPanMode(bool on) {
@@ -529,7 +605,7 @@ void MapWidget::clearAllHighlights() {
     // Transit line highlight
     if (transitRouteRenderer_) transitRouteRenderer_->setHighlightedLine(0);
     // Vehicle tracking + its halo
-    if (trackedVehicleId_ != 0) stopTracking();
+    if (trackedVehicleId_ != kNoVehicle) stopTracking();
     clearHaloPosition();
     update();
 }
@@ -579,6 +655,56 @@ void MapWidget::panTo(float worldX, float worldY) {
     update();
 }
 
+void MapWidget::setView(double worldX, double worldY, double metresPerPixel) {
+    centerX_ = worldX;
+    centerY_ = worldY;
+    zoom_ = std::clamp(1.0 / std::max(metresPerPixel, 1e-9), minZoom_, maxZoom_);
+    updateView();
+    emit viewChanged();
+    update();
+}
+
+MapWidget::FrameTiming MapWidget::measureFrames(float startTime, int frames, float step) {
+    FrameTiming result;
+    if (width() <= 0 || height() <= 0 || frames <= 0) return result;
+
+    makeCurrent();
+    const qreal dpr = devicePixelRatioF();
+    const int w = static_cast<int>(width() * dpr);
+    const int h = static_cast<int>(height() * dpr);
+    QOpenGLFramebufferObjectFormat fboFormat;
+    fboFormat.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
+    QOpenGLFramebufferObject fbo(w, h, fboFormat);
+    if (!fbo.isValid()) {
+        LOG_ERROR("measureFrames: failed to create off-screen framebuffer");
+        doneCurrent();
+        return result;
+    }
+    fbo.bind();
+    glViewport(0, 0, w, h);
+
+    // The update is the playback path (setSimulationTime). The render ends
+    // with glFinish, so its time includes the GPU work, not only the calls.
+    QElapsedTimer timer;
+    for (int i = 0; i < frames; ++i) {
+        timer.start();
+        setSimulationTime(startTime + static_cast<float>(i) * step);
+        result.updateMs.push_back(timer.nsecsElapsed() / 1e6);
+
+        timer.start();
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        drawLayers();
+        glFinish();
+        result.renderMs.push_back(timer.nsecsElapsed() / 1e6);
+    }
+    result.activeVehicles = vehicleRenderer_ ? vehicleRenderer_->activeVehicleCount() : 0;
+
+    fbo.release();
+    doneCurrent();
+    setSimulationTime(startTime);
+    return result;
+}
+
 void MapWidget::initializeGL() {
     // Initialize renderers
     tileRenderer_ = std::make_unique<TileRenderer>(this);
@@ -611,6 +737,12 @@ void MapWidget::initializeGL() {
     heatmapRenderer_ = std::make_unique<HeatmapRenderer>();
     vehicleHaloRenderer_ = std::make_unique<HaloRenderer>();
     countsHaloRenderer_ = std::make_unique<HaloRenderer>();
+    airOverlayRenderer_ = std::make_unique<AirOverlayRenderer>();
+    if (!airOverlayRenderer_->initialize()) {
+        LOG_WARN("Failed to initialize air overlay renderer");
+    }
+    airOverlayRenderer_->setVehicleRenderer(vehicleRenderer_.get());
+    airOverlayRenderer_->setVehicleIndex(vehicleIndex_);
     if (!countsRenderer_->initialize()) {
         LOG_WARN("Failed to initialize counts renderer");
     }
@@ -638,7 +770,9 @@ void MapWidget::initializeGL() {
         networkRenderer_->setNetworkIndex(networkIndex_);
         vehicleRenderer_->setNetworkIndex(networkIndex_);
         transitRouteRenderer_->setNetworkIndex(networkIndex_);
+        airOverlayRenderer_->setNetworkIndex(networkIndex_);
     }
+    applyAirSettings();
 
     if (vehicleIndex_) {
         vehicleRenderer_->setVehicleIndex(vehicleIndex_);
@@ -680,61 +814,16 @@ void MapWidget::resizeGL(int w, int h) {
     if (selectionRenderer_) {
         selectionRenderer_->setViewportSize(w, h);
     }
+    if (airOverlayRenderer_) {
+        airOverlayRenderer_->setViewportSize(w, h);
+    }
 }
 
 void MapWidget::paintGL() {
     try {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Render background map tiles (bottom-most layer)
-        if (tileRenderer_) {
-            tileRenderer_->render();
-        }
-
-        // Render network
-        if (networkRenderer_) {
-            networkRenderer_->render();
-        }
-
-        // Density heatmap sits directly on the roads it describes, so it is
-        // drawn just above the network and below every selection overlay.
-        if (heatmapRenderer_) {
-            heatmapRenderer_->render();
-        }
-
-        // Render count links overlay (above network, below transit)
-        if (countsRenderer_) {
-            countsRenderer_->render();
-        }
-        // Cyan halos marking count-station locations (above the yellow links)
-        if (countsHaloRenderer_) {
-            countsHaloRenderer_->render();
-        }
-
-        // Render transit routes and stops (middle layer, above network)
-        if (transitRouteRenderer_) {
-            transitRouteRenderer_->render();
-        }
-
-        // Scenario selection, under the yellow inspected-link band
-        if (selectionRenderer_) {
-            selectionRenderer_->render();
-        }
-
-        // Person full-day route overlay (above routes, below vehicles)
-        if (personRouteRenderer_) {
-            personRouteRenderer_->render();
-        }
-
-        // Tracked-vehicle selection halo (just under the vehicle glyph)
-        if (vehicleHaloRenderer_) {
-            vehicleHaloRenderer_->render();
-        }
-
-        // Render vehicles (top layer)
-        if (showVehicles_ && vehicleRenderer_) {
-            vehicleRenderer_->render();
-        }
+        drawLayers();
 
         // Activity markers (QPainter over the GL frame): emoji + label pinned
         // to world positions, shown together with the person route overlay
@@ -780,6 +869,7 @@ void MapWidget::paintGL() {
         {
             QPainter painter(this);
             drawHeatmapLegend(painter, size(), 1.0);
+            drawAltitudeLegend(painter, size(), 1.0);
         }
 
         // Nothing loaded yet: say how to load something
@@ -800,6 +890,65 @@ void MapWidget::paintGL() {
         }
     } catch (const std::exception& e) {
         LOG_ERROR(QString("paintGL exception: %1").arg(e.what()));
+    }
+}
+
+void MapWidget::drawLayers() {
+    // Render background map tiles (bottom-most layer)
+    if (tileRenderer_) {
+        tileRenderer_->render();
+    }
+
+    // Render network
+    if (networkRenderer_) {
+        networkRenderer_->render();
+    }
+
+    // Density heatmap sits directly on the roads it describes, so it is
+    // drawn just above the network and below every selection overlay.
+    if (heatmapRenderer_) {
+        heatmapRenderer_->render();
+    }
+
+    // Render count links overlay (above network, below transit)
+    if (countsRenderer_) {
+        countsRenderer_->render();
+    }
+    // Cyan halos marking count-station locations (above the yellow links)
+    if (countsHaloRenderer_) {
+        countsHaloRenderer_->render();
+    }
+
+    // Render transit routes and stops (middle layer, above network)
+    if (transitRouteRenderer_) {
+        transitRouteRenderer_->render();
+    }
+
+    // Scenario selection, under the yellow inspected-link band
+    if (selectionRenderer_) {
+        selectionRenderer_->render();
+    }
+
+    // Person full-day route overlay (above routes, below vehicles)
+    if (personRouteRenderer_) {
+        personRouteRenderer_->render();
+    }
+
+    // Vertiports (and air events): above the ground layers, below vehicles
+    if (airOverlayRenderer_) {
+        airOverlayRenderer_->render();
+    }
+
+    // Tracked-vehicle selection halo (just under the vehicle glyph)
+    if (vehicleHaloRenderer_) {
+        vehicleHaloRenderer_->render();
+    }
+
+    // Render vehicles (top layer)
+    if (showVehicles_ && vehicleRenderer_) {
+        vehicleRenderer_->render();
+        // Losses of separation mark the aircraft, so they go over them
+        if (airOverlayRenderer_) airOverlayRenderer_->renderLosses();
     }
 }
 
@@ -873,6 +1022,7 @@ void MapWidget::updateProjection() {
     }
     if (vehicleHaloRenderer_) vehicleHaloRenderer_->setProjectionMatrix(projectionMatrix_);
     if (countsHaloRenderer_)  countsHaloRenderer_->setProjectionMatrix(projectionMatrix_);
+    if (airOverlayRenderer_)  airOverlayRenderer_->setProjectionMatrix(projectionMatrix_);
 }
 
 void MapWidget::updateView() {
@@ -905,6 +1055,7 @@ void MapWidget::updateView() {
     }
     if (vehicleHaloRenderer_) vehicleHaloRenderer_->setViewMatrix(viewMatrix_);
     if (countsHaloRenderer_)  countsHaloRenderer_->setViewMatrix(viewMatrix_);
+    if (airOverlayRenderer_)  airOverlayRenderer_->setViewMatrix(viewMatrix_);
 
     updateProjection();
 }
@@ -957,7 +1108,7 @@ void MapWidget::mousePressEvent(QMouseEvent* event) {
             uint32_t clickedVehicle = vehicleRenderer_->findVehicleAt(
                 worldPos.x(), worldPos.y(), hitRadius);
 
-            if (clickedVehicle != 0) {
+            if (clickedVehicle != kNoVehicle) {
                 setTrackedVehicle(clickedVehicle);
                 return;
             }
@@ -1009,7 +1160,7 @@ void MapWidget::mousePressEvent(QMouseEvent* event) {
         }
 
         // No interactive element clicked - start panning (and stop tracking)
-        if (trackedVehicleId_ != 0) {
+        if (trackedVehicleId_ != kNoVehicle) {
             stopTracking();
         }
         emit emptyMapClicked();
@@ -1203,6 +1354,7 @@ QImage MapWidget::renderToImage(int scaleFactor) {
         if (vehicleHaloRenderer_)  { vehicleHaloRenderer_->setProjectionMatrix(proj);  vehicleHaloRenderer_->setViewportSize(vpW, vpH); }
         if (countsHaloRenderer_)   { countsHaloRenderer_->setProjectionMatrix(proj);   countsHaloRenderer_->setViewportSize(vpW, vpH); }
         if (heatmapRenderer_)      { heatmapRenderer_->setProjectionMatrix(proj);      heatmapRenderer_->setViewportSize(vpW, vpH); }
+        if (airOverlayRenderer_)   { airOverlayRenderer_->setProjectionMatrix(proj);   airOverlayRenderer_->setViewportSize(vpW, vpH); }
     };
 
     applyExportState(exportProj, outW, outH);
@@ -1218,6 +1370,8 @@ QImage MapWidget::renderToImage(int scaleFactor) {
     }
     if (vehicleHaloRenderer_)  vehicleHaloRenderer_->setPointScale(static_cast<float>(scaleFactor));
     if (countsHaloRenderer_)   countsHaloRenderer_->setPointScale(static_cast<float>(scaleFactor));
+    if (networkRenderer_)      networkRenderer_->setPointScale(static_cast<float>(scaleFactor));
+    if (airOverlayRenderer_)   airOverlayRenderer_->setPointScale(static_cast<float>(scaleFactor));
     // Lixel marks are sized in pixels from lixelSize * zoom, so they need the
     // same correction as the other point sprites to cover the same ground.
     if (heatmapRenderer_)      heatmapRenderer_->setPointScale(static_cast<float>(scaleFactor));
@@ -1226,16 +1380,7 @@ QImage MapWidget::renderToImage(int scaleFactor) {
     glViewport(0, 0, outW, outH);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    if (tileRenderer_)         tileRenderer_->render();
-    if (networkRenderer_)      networkRenderer_->render();
-    if (heatmapRenderer_)      heatmapRenderer_->render();
-    if (countsRenderer_)       countsRenderer_->render();
-    if (countsHaloRenderer_)   countsHaloRenderer_->render();
-    if (transitRouteRenderer_) transitRouteRenderer_->render();
-    if (selectionRenderer_)    selectionRenderer_->render();
-    if (personRouteRenderer_)  personRouteRenderer_->render();
-    if (vehicleHaloRenderer_)  vehicleHaloRenderer_->render();
-    if (showVehicles_ && vehicleRenderer_) vehicleRenderer_->render();
+    drawLayers();
 
     QImage image = fbo.toImage();
     fbo.release();
@@ -1246,6 +1391,7 @@ QImage MapWidget::renderToImage(int scaleFactor) {
     if (!image.isNull()) {
         QPainter painter(&image);
         drawHeatmapLegend(painter, image.size(), dpr * scaleFactor);
+        drawAltitudeLegend(painter, image.size(), dpr * scaleFactor);
     }
 
     // Restore live state. The renderers' live viewport size is whatever Qt last
@@ -1261,11 +1407,60 @@ QImage MapWidget::renderToImage(int scaleFactor) {
     if (vehicleHaloRenderer_)  vehicleHaloRenderer_->setPointScale(1.0f);
     if (countsHaloRenderer_)   countsHaloRenderer_->setPointScale(1.0f);
     if (heatmapRenderer_)      heatmapRenderer_->setPointScale(1.0f);
+    if (networkRenderer_)      networkRenderer_->setPointScale(1.0f);
+    if (airOverlayRenderer_)   airOverlayRenderer_->setPointScale(1.0f);
 
     doneCurrent();
     update();  // repaint the live widget with restored state
 
     return image;
+}
+
+void MapWidget::drawAltitudeLegend(QPainter& painter, const QSize& deviceSize, qreal scale) {
+    if (!hasAirVehicles_ || !showVehicles_ || airTopHeight_ <= 0.0f ||
+        !vehicleRenderer_ || vehicleRenderer_->colorMode() != VehicleColorMode::Speed) {
+        return;
+    }
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const int kBarW = static_cast<int>(150 * scale);
+    const int kBarH = static_cast<int>(10 * scale);
+    const int kPad = static_cast<int>(12 * scale);
+    const int x = deviceSize.width() - kPad - kBarW;
+    const int y = deviceSize.height() - kPad - kBarH - static_cast<int>(20 * scale);
+
+    QFont titleFont = painter.font();
+    titleFont.setPointSizeF(9 * scale);
+    titleFont.setBold(true);
+    QFont tickFont = painter.font();
+    tickFont.setPointSizeF(8 * scale);
+
+    QRectF panel(x - 8 * scale, y - 20 * scale, kBarW + 16 * scale, kBarH + 40 * scale);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(0, 0, 0, 170));
+    painter.drawRoundedRect(panel, 6 * scale, 6 * scale);
+
+    painter.setFont(titleFont);
+    painter.setPen(Qt::white);
+    painter.drawText(QRectF(x, y - 18 * scale, kBarW, 16 * scale),
+                     Qt::AlignLeft | Qt::AlignVCenter, tr("Aircraft height"));
+
+    for (int i = 0; i < kBarW; ++i) {
+        float r, g, b;
+        VehicleRenderer::altitudeColor(static_cast<float>(i) / static_cast<float>(kBarW - 1), r, g, b);
+        painter.setPen(QColor::fromRgbF(r, g, b));
+        painter.drawLine(x + i, y, x + i, y + kBarH);
+    }
+
+    painter.setFont(tickFont);
+    painter.setPen(QColor(220, 220, 220));
+    painter.drawText(QRectF(x, y + kBarH + 2 * scale, kBarW / 2, 14 * scale),
+                     Qt::AlignLeft, tr("0 m"));
+    painter.drawText(QRectF(x + kBarW / 2, y + kBarH + 2 * scale, kBarW / 2, 14 * scale),
+                     Qt::AlignRight, tr("%1 m").arg(airTopHeight_, 0, 'f', 0));
+    painter.restore();
 }
 
 void MapWidget::drawHeatmapLegend(QPainter& painter, const QSize& deviceSize, qreal scale) {

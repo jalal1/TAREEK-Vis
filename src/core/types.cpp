@@ -13,6 +13,14 @@ RoadType parseRoadType(const std::string& type) {
     if (type == "residential") return RoadType::Residential;
     if (type == "service") return RoadType::Service;
     if (type.empty()) return RoadType::Unknown;
+    if (type.rfind("air_", 0) == 0) {
+        if (type == "air_vertical") return RoadType::AirVertical;
+        if (type == "air_climb") return RoadType::AirClimb;
+        if (type == "air_cruise") return RoadType::AirCruise;
+        if (type == "air_descent") return RoadType::AirDescent;
+        if (type == "air_hover") return RoadType::AirHover;
+        return RoadType::AirOther;
+    }
     return RoadType::Other;
 }
 
@@ -32,6 +40,13 @@ EventType parseEventType(std::string_view type) {
     if (type == "departure") return EventType::Departure;
     if (type == "arrival") return EventType::Arrival;
     if (type == "TransitDriverStarts") return EventType::TransitDriverStarts;
+    if (type.size() > 4 && type.substr(0, 4) == "uam_") {
+        if (type == "uam_los_start") return EventType::UamLosStart;
+        if (type == "uam_los_end") return EventType::UamLosEnd;
+        if (type == "uam_ground_hold") return EventType::UamGroundHold;
+        if (type == "uam_hold_start") return EventType::UamHoldStart;
+        if (type == "uam_hold_end") return EventType::UamHoldEnd;
+    }
     return EventType::Unknown;
 }
 
@@ -48,6 +63,11 @@ const char* eventTypeName(EventType type) {
         case EventType::Departure: return "departure";
         case EventType::Arrival: return "arrival";
         case EventType::TransitDriverStarts: return "TransitDriverStarts";
+        case EventType::UamLosStart: return "uam_los_start";
+        case EventType::UamLosEnd: return "uam_los_end";
+        case EventType::UamGroundHold: return "uam_ground_hold";
+        case EventType::UamHoldStart: return "uam_hold_start";
+        case EventType::UamHoldEnd: return "uam_hold_end";
         default: return "unknown";
     }
 }

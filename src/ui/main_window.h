@@ -65,6 +65,21 @@ public slots:
     void loadNetworkFile(const QString& path);
     void loadEventsFile(const QString& path);
 
+public:
+    // Scene capture (--scenes): no recent-folder entry and no background
+    // workers that would share the CPU with the timed frames
+    void setCaptureMode(bool on) { captureMode_ = on; }
+    MapWidget* mapWidget() const { return mapWidget_; }
+    // Internal id of a vehicle from its MATSim id, or kNoVehicle
+    uint32_t vehicleIdOf(const QString& matsimId) const {
+        return vehicleIndex_ ? vehicleIndex_->findVehicleByOriginalId(matsimId.toStdString())
+                             : kNoVehicle;
+    }
+
+signals:
+    // A run is loaded and on the map (from the cache or after preprocessing)
+    void runLoaded();
+
 protected:
     void closeEvent(QCloseEvent* event) override;
 
@@ -198,6 +213,10 @@ private:
     // Rebuild the heatmap menu from the activity types the loaded scenario
     // actually contains. Types are scenario-defined, so they cannot be fixed.
     void populateHeatmapMenu();
+    // View > Other Modes: the modes of the run without their own button
+    void populateOtherModesMenu();
+    // Air > Altitude Band: the height bands of the run
+    void populateAltitudeBandMenu();
 
     // Read the run's cached network and vehicle index on a worker thread,
     // with the transit schedule when the run comes from the cache. A card
@@ -263,6 +282,7 @@ private:
     // True while that runs. If it fails or is cancelled, the cache from
     // before still loads, so the run does not go away.
     bool rebuildingCache_ = false;
+    bool captureMode_ = false;
     QAction* fitAction_ = nullptr;
     QAction* zoomInAction_ = nullptr;
     QAction* zoomOutAction_ = nullptr;
@@ -289,6 +309,14 @@ private:
     QMenu* vehicleShapeMenu_ = nullptr;
     QMenu* vehicleSizeMenu_ = nullptr;
     QMenu* vehicleColorMenu_ = nullptr;
+    QMenu* otherModesMenu_ = nullptr;
+    QAction* showAirLinksAction_ = nullptr;
+    QAction* showVertiportsAction_ = nullptr;
+    QAction* showTrailsAction_ = nullptr;
+    QMenu* altitudeLiftMenu_ = nullptr;
+    QMenu* altitudeBandMenu_ = nullptr;
+    QAction* showLossesAction_ = nullptr;
+    QAction* showHoldsAction_ = nullptr;
     QMenu* routeThicknessMenu_ = nullptr;
     QMenu* tileSourceMenu_ = nullptr;
 
@@ -511,9 +539,9 @@ private:
     // empty map to pan) so the route overlay and trip clicks keep working until
     // a different vehicle is selected.
     uint32_t routePersonPlus1_ = 0;
-    uint32_t infoVehicleId_ = 0;
+    uint32_t infoVehicleId_ = kNoVehicle;
     // The panel describes the person routePersonPlus1_ (found by the search),
-    // not the tracked vehicle. infoVehicleId_ is then their own car, or 0.
+    // not the tracked vehicle. infoVehicleId_ is then their own car, or kNoVehicle.
     bool infoShowsPerson_ = false;
 
     // The vehicle or person the search found and the halo follows (id + 1,

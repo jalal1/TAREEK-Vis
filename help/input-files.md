@@ -23,6 +23,24 @@ TAREEK-Vis reads standard MATSim output files. Each file can be plain XML
 The `coordinateReferenceSystem` attribute is optional. The background map
 needs it.
 
+### Air traffic
+
+A node can have a height `z`, in metres above the region datum. A link with
+the type attribute `air_vertical`, `air_climb`, `air_cruise`, `air_descent` or
+`air_hover` is an air link. The tareek-air simulator writes such networks.
+
+```xml
+<node id="uam_n1" x="481200.0" y="4997300.0" z="450.0" />
+<link id="uam_l7" from="uam_n0" to="uam_n1" length="460" freespeed="15">
+  <attributes>
+    <attribute name="type" class="java.lang.String">air_climb</attribute>
+  </attributes>
+</link>
+```
+
+A node without `z` is on the ground (height 0). The **Info** page shows the
+type of an air link, for example **Air: climb**.
+
 ## Events (required)
 
 ```xml

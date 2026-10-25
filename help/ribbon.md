@@ -23,7 +23,7 @@
 |-------|--------|-----|
 | Layers | Nodes, Links, Link Counts | Show or hide the layer. |
 | Layers | Info Panel | Show or hide the Info page of the side panel. |
-| Vehicles | All Vehicles, Private, Bus, Tram, Rail | Show or hide the vehicles of that type. |
+| Vehicles | All Vehicles, Private, Bus, Tram, Rail, Other Modes | Show or hide the vehicles of that type. Other Modes lists the other modes of the run. |
 | Vehicle Style | Shape, Size, Color | Change how vehicles look. |
 | Background Map | Background Map | Show or hide the background map. |
 | Background Map | Source | Select OpenStreetMap, Satellite or Topo Map. |
@@ -35,6 +35,18 @@
 | Routes | Bus, Tram, Rail | Show or hide the routes of that mode. |
 | Stops | Bus Stops | Show or hide the stops. |
 | Style | Route Thickness | Set the line width of the routes. |
+
+## Air
+
+The Air tab shows only when the run has aircraft. See [Air traffic](air-traffic.md).
+
+| Group | Button | Use |
+|-------|--------|-----|
+| Layers | Air Links | Show or hide the air links. Off at the start. |
+| Layers | Vertiports, Trails | Show or hide the vertiport marks or the trails. |
+| Height | Altitude Lift | How far an aircraft symbol moves up for its height. |
+| Height | Altitude Band | Show only the aircraft in one band of height. |
+| Events | Losses, Holds | Show or hide the losses of separation or the holds. |
 
 ## Analysis
 

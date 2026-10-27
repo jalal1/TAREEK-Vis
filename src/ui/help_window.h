@@ -32,15 +32,28 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    // A "##" or "###" part of a page
+    struct Section {
+        QString heading;  // as the page shows it
+        QString text;     // lower case, for the search
+    };
     struct Page {
         QString file;
         QString title;
         QString text;   // lower case, for the search
+        QList<Section> sections;
     };
 
     void loadContents();
     void showContents();
+    // The pages that have all the words, most matches first, each with the
+    // sections that have all the words
     void search(const QString& text);
+    // Open a page at a heading, with the first word of the search selected
+    // below it
+    void showSection(const QString& file, const QString& heading);
+    // Select the next place of the first word of the search, from the cursor
+    void findSearchWord();
     void selectCurrentPage();
     void polishPage();
     // Show a picture of the help at full size, in a window of its own

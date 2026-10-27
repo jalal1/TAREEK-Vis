@@ -17,6 +17,7 @@ set(SOURCES
     src/core/types.cpp
     src/core/config.cpp
     src/core/transit_types.cpp
+    src/core/modes.cpp
     src/core/video_recorder.cpp
     src/core/logger.cpp
     src/parsers/network_parser.cpp
@@ -38,6 +39,7 @@ set(SOURCES
     src/renderer/halo_renderer.cpp
     src/renderer/tile_renderer.cpp
     src/renderer/heatmap_renderer.cpp
+    src/renderer/air_overlay_renderer.cpp
     src/ui/main_window.cpp
     src/ui/map_widget.cpp
     src/ui/info_panel.cpp
@@ -51,6 +53,7 @@ set(SOURCES
     src/ui/side_panel.cpp
     src/ui/loading_indicator.cpp
     src/ui/help_window.cpp
+    src/ui/scene_runner.cpp
     src/ui/ribbon/ribbon.cpp
     src/ui/ribbon/icons/ribbon_icons.qrc
     third_party/pugixml.cpp
@@ -60,6 +63,7 @@ set(HEADERS
     src/core/types.h
     src/core/config.h
     src/core/transit_types.h
+    src/core/modes.h
     src/core/video_recorder.h
     src/core/logger.h
     src/parsers/network_parser.h
@@ -81,6 +85,7 @@ set(HEADERS
     src/renderer/halo_renderer.h
     src/renderer/tile_renderer.h
     src/renderer/heatmap_renderer.h
+    src/renderer/air_overlay_renderer.h
     src/renderer/heatmap_palette.h
     src/core/crs_transform.h
     src/ui/main_window.h
@@ -99,6 +104,7 @@ set(HEADERS
     src/ui/loading_indicator.h
     src/ui/search_box.h
     src/ui/help_window.h
+    src/ui/scene_runner.h
     src/ui/ribbon/ribbon.h
 )
 
@@ -164,6 +170,7 @@ set(BENCH_SOURCES
     src/tools/benchmark_main.cpp
     src/core/types.cpp
     src/core/transit_types.cpp
+    src/core/modes.cpp
     src/core/logger.cpp
     src/parsers/network_parser.cpp
     src/parsers/event_parser.cpp

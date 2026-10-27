@@ -16,13 +16,19 @@ namespace simvis {
 // Snapshot of everything the panel shows about a tracked vehicle.
 // Assembled by MainWindow from VehicleIndex/NetworkIndex/VehicleState.
 struct VehicleInfo {
-    uint32_t vehicleId = 0;   // 0 = no vehicle: a person and their trips only
+    uint32_t vehicleId = kNoVehicle;   // kNoVehicle: a person and their trips only
     QString vehicleName;      // original MATSim vehicle id string
     QString mode;             // "Car", "Bus", ...
     bool active = false;      // currently on the network
     float speedKmh = -1.0f;   // < 0 = unknown
     float speedRatio = -1.0f; // actual/freeflow, < 0 = unknown
     float currentTime = 0.0f; // seconds
+
+    // Aircraft (3D modes) on the network now
+    bool hasHeight = false;
+    float heightM = 0.0f;       // above the region datum
+    float verticalRate = 0.0f;  // m/s, > 0 climbing
+    QString phase;              // Take-off, Climb, Cruise, Descent, Landing, Hover
 
     // Driver / trips (cars: the person's full day; empty for transit vehicles)
     QString personName;       // driver's original MATSim person id
@@ -121,7 +127,7 @@ private:
     // The panel is rebuilt each second of simulated time while a vehicle is
     // tracked. The passenger list keeps its scroll position across rebuilds
     // of the same vehicle.
-    uint32_t passengerListVehicle_ = 0;
+    uint32_t passengerListVehicle_ = kNoVehicle;
     int passengerListScroll_ = 0;
 
 protected:

@@ -20,7 +20,8 @@ struct VehicleState;
 
 // Binary file magic numbers for validation
 constexpr uint32_t NETWORK_FILE_MAGIC = 0x4E455457;  // "NETW"
-constexpr uint32_t FILE_VERSION = 1;
+// v2: NodeRecord::z (the former padding) holds the node height
+constexpr uint32_t FILE_VERSION = 2;
 
 // ============================================================================
 // Coordinate types
@@ -81,7 +82,7 @@ struct NodeRecord {
     uint32_t id;          // Internal numeric ID (mapped from string)
     float x;              // X coordinate
     float y;              // Y coordinate
-    uint32_t padding;     // Alignment padding
+    float z;              // Height above the region datum, m (0 when the network has none)
 };
 static_assert(sizeof(NodeRecord) == 16, "NodeRecord must be 16 bytes");
 
@@ -108,10 +109,19 @@ enum class RoadType : uint8_t {
     Tertiary,
     Residential,
     Service,
-    Other
+    Other,
+    // Air links (tareek-air writes the link type air_*). Kept after the road
+    // types, so that "is air" is one comparison.
+    AirVertical,          // same x, y at both ends: take-off and landing
+    AirClimb,
+    AirCruise,
+    AirDescent,
+    AirHover,             // same x, y and z at both ends: a hold in place
+    AirOther              // any other air_* type, for example air_sentinel (older tareek-air output)
 };
 
 RoadType parseRoadType(const std::string& type);
+inline bool isAirRoadType(RoadType type) { return type >= RoadType::AirVertical; }
 
 // Runtime node with full data
 struct Node {
@@ -155,7 +165,13 @@ enum class EventType : uint8_t {
     ActivityEnd,
     Departure,           // MATSim "departure": person, link, legMode
     Arrival,             // MATSim "arrival": person, link, legMode
-    TransitDriverStarts  // MATSim "TransitDriverStarts": driverId, vehicleId, transitLineId, transitRouteId
+    TransitDriverStarts, // MATSim "TransitDriverStarts": driverId, vehicleId, transitLineId, transitRouteId
+    // tareek-air custom events
+    UamLosStart,         // vehicle, vehicle2, zone, min_horizontal_m
+    UamLosEnd,           // vehicle, vehicle2
+    UamGroundHold,       // vehicle, duration_s, vertiport
+    UamHoldStart,        // vehicle, vertiport, kind
+    UamHoldEnd           // vehicle, vertiport
 };
 
 EventType parseEventType(const std::string& type);
@@ -166,9 +182,14 @@ const char* eventTypeName(EventType type);
 // Vehicle state for rendering
 // ============================================================================
 
+// "No vehicle" and "no link" for internal ids. The interners give id 0 to the
+// first vehicle and the first link of a file, so 0 cannot mean "none".
+constexpr uint32_t kNoVehicle = 0xFFFFFFFF;
+constexpr uint32_t kNoLinkId  = 0xFFFFFFFF;
+
 struct VehicleState {
-    uint32_t vehicleId;
-    uint32_t currentLink;
+    uint32_t vehicleId = kNoVehicle;
+    uint32_t currentLink = kNoLinkId;
     float linkProgress;    // 0.0 = at from node, 1.0 = at to node
     float entryTime;
     float exitTime;
@@ -179,6 +200,12 @@ struct VehicleState {
     float y;
     float angle = 0.0f;            // Direction angle in radians (0 = east, pi/2 = north)
 
+    // Height (3D modes, core/modes.h). z is above the region datum, from the
+    // link's node heights; verticalRate is in m/s, > 0 when climbing.
+    float z = 0.0f;
+    float verticalRate = 0.0f;
+    bool is3D = false;
+
     // Speed-based color visualization
     float speedRatio = 1.0f;       // actualSpeed / freeflowSpeed (1.0 = full speed, 0.0 = stopped)
     float r = 0.2f;                // Per-vehicle color (default green)
@@ -186,7 +213,7 @@ struct VehicleState {
     float b = 0.2f;
 
     // Smooth link transition fields
-    uint32_t previousLink = 0;         // Link vehicle just left (0 if none)
+    uint32_t previousLink = kNoLinkId; // Link vehicle just left (kNoLinkId if none)
     float transitionStartTime = 0.0f;  // When the transition began
     float previousLinkAngle = 0.0f;    // Angle of the previous link (for smooth rotation)
     bool inTransition = false;         // Whether currently in a transition period

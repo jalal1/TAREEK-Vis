@@ -35,6 +35,7 @@
 #include <QProgressDialog>
 #include <QInputDialog>
 #include <QSettings>
+#include "core/modes.h"
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
@@ -290,28 +291,88 @@ void MainWindow::setupActions() {
     showCarsAction_->setCheckable(true);
     showCarsAction_->setChecked(true);
     connect(showCarsAction_, &QAction::toggled, this, [this](bool checked) {
-        mapWidget_->setShowCars(checked);
+        mapWidget_->setModeVisible(modes::kCar, checked);
     });
 
     showBusVehiclesAction_ = new QAction("Show &Buses", this);
     showBusVehiclesAction_->setCheckable(true);
     showBusVehiclesAction_->setChecked(true);
     connect(showBusVehiclesAction_, &QAction::toggled, this, [this](bool checked) {
-        mapWidget_->setShowBuses(checked);
+        mapWidget_->setModeVisible(modes::kBus, checked);
     });
 
     showTramVehiclesAction_ = new QAction("Show &Trams", this);
     showTramVehiclesAction_->setCheckable(true);
     showTramVehiclesAction_->setChecked(true);
     connect(showTramVehiclesAction_, &QAction::toggled, this, [this](bool checked) {
-        mapWidget_->setShowTrams(checked);
+        mapWidget_->setModeVisible(modes::kTram, checked);
     });
 
     showRailVehiclesAction_ = new QAction("Show &Rail", this);
     showRailVehiclesAction_->setCheckable(true);
     showRailVehiclesAction_->setChecked(true);
     connect(showRailVehiclesAction_, &QAction::toggled, this, [this](bool checked) {
-        mapWidget_->setShowRailVehicles(checked);
+        mapWidget_->setModeVisible(modes::kRail, checked);
+    });
+
+    // The other modes of the registry (air, taxi, bike, ...). The menu is
+    // filled for each run with the modes that it contains.
+    otherModesMenu_ = new QMenu("Other &Modes", this);
+    otherModesMenu_->setEnabled(false);
+
+    // --- Air section (tab Air, shown when the run has aircraft) ---
+    showAirLinksAction_ = new QAction("Show Air &Links", this);
+    showAirLinksAction_->setCheckable(true);
+    showAirLinksAction_->setChecked(false);  // many, and they cross: off by default
+    connect(showAirLinksAction_, &QAction::toggled, this, [this](bool checked) {
+        mapWidget_->setShowAirLinks(checked);
+    });
+
+    showVertiportsAction_ = new QAction("Show &Vertiports", this);
+    showVertiportsAction_->setCheckable(true);
+    showVertiportsAction_->setChecked(true);
+    connect(showVertiportsAction_, &QAction::toggled, this, [this](bool checked) {
+        mapWidget_->setShowVertiports(checked);
+    });
+
+    showTrailsAction_ = new QAction("Show &Trails", this);
+    showTrailsAction_->setCheckable(true);
+    showTrailsAction_->setChecked(true);
+    connect(showTrailsAction_, &QAction::toggled, this, [this](bool checked) {
+        mapWidget_->setShowTrails(checked);
+    });
+
+    // Height lift in screen pixels per metre: 500 m is 10, 20 or 40 px
+    altitudeLiftMenu_ = new QMenu("Altitude &Lift", this);
+    auto* liftGroup = new QActionGroup(this);
+    const std::pair<const char*, float> lifts[] = {
+        {"&No Lift", 0.0f}, {"&Low Lift", 0.02f}, {"&Medium Lift", 0.04f}, {"&High Lift", 0.08f}};
+    for (const auto& [text, pxPerMetre] : lifts) {
+        QAction* action = altitudeLiftMenu_->addAction(text);
+        action->setCheckable(true);
+        action->setChecked(pxPerMetre == 0.04f);
+        action->setActionGroup(liftGroup);
+        const float value = pxPerMetre;
+        connect(action, &QAction::triggered, this, [this, value]() {
+            mapWidget_->setAltitudeLift(value);
+        });
+    }
+
+    // Height bands, filled for each run (populateAltitudeBandMenu)
+    altitudeBandMenu_ = new QMenu("Altitude &Band", this);
+
+    // tareek-air events
+    showLossesAction_ = new QAction("Show Lo&sses", this);
+    showLossesAction_->setCheckable(true);
+    showLossesAction_->setChecked(true);
+    connect(showLossesAction_, &QAction::toggled, this, [this](bool checked) {
+        mapWidget_->setShowLosses(checked);
+    });
+    showHoldsAction_ = new QAction("Show &Holds", this);
+    showHoldsAction_->setCheckable(true);
+    showHoldsAction_->setChecked(true);
+    connect(showHoldsAction_, &QAction::toggled, this, [this](bool checked) {
+        mapWidget_->setShowHolds(checked);
     });
 
     // Vehicle shape choices
@@ -705,12 +766,16 @@ void MainWindow::setupRibbon() {
     layers->addSmallAction(showCountsAction_);
     layers->addLargeAction(showInfoPanelAction_);
 
+    otherModesMenu_->menuAction()->setIcon(ribbonIcon("list-checks"));
+    otherModesMenu_->menuAction()->setIconText("Other\nModes");
+
     auto* vehicles = view->addGroup("Vehicles");
     vehicles->addLargeAction(showVehiclesAction_);
     vehicles->addSmallAction(showCarsAction_);
     vehicles->addSmallAction(showBusVehiclesAction_);
     vehicles->addSmallAction(showTramVehiclesAction_);
     vehicles->addSmallAction(showRailVehiclesAction_);
+    vehicles->addLargeAction(otherModesMenu_->menuAction());
 
     auto* vehicleStyle = view->addGroup("Vehicle Style");
     vehicleStyle->addSmallAction(vehicleShapeMenu_->menuAction());
@@ -732,6 +797,35 @@ void MainWindow::setupRibbon() {
     showBusStopsAction_->setIconText("Bus\nStops");
     routeThicknessMenu_->menuAction()->setIcon(ribbonIcon("pen-line"));
     routeThicknessMenu_->menuAction()->setIconText("Route\nThickness");
+
+    // --- Air tab ---
+    showAirLinksAction_->setIcon(ribbonIcon("spline"));
+    showAirLinksAction_->setIconText("Air\nLinks");
+    showVertiportsAction_->setIcon(ribbonIcon("map-pin"));
+    showVertiportsAction_->setIconText("Vertiports");
+    showTrailsAction_->setIcon(ribbonIcon("history"));
+    showTrailsAction_->setIconText("Trails");
+    altitudeLiftMenu_->menuAction()->setIcon(ribbonIcon("chart-line"));
+    altitudeLiftMenu_->menuAction()->setIconText("Altitude\nLift");
+    altitudeBandMenu_->menuAction()->setIcon(ribbonIcon("layers"));
+    altitudeBandMenu_->menuAction()->setIconText("Altitude\nBand");
+
+    auto* air = ribbon_->addTab("Air");
+    auto* airLayers = air->addGroup("Layers");
+    airLayers->addLargeAction(showAirLinksAction_);
+    airLayers->addSmallAction(showVertiportsAction_);
+    airLayers->addSmallAction(showTrailsAction_);
+    auto* airHeight = air->addGroup("Height");
+    airHeight->addLargeAction(altitudeLiftMenu_->menuAction());
+    airHeight->addLargeAction(altitudeBandMenu_->menuAction());
+    showLossesAction_->setIcon(ribbonIcon("x"));
+    showLossesAction_->setIconText("Losses");
+    showHoldsAction_->setIcon(ribbonIcon("loader-circle"));
+    showHoldsAction_->setIconText("Holds");
+    auto* airEvents = air->addGroup("Events");
+    airEvents->addLargeAction(showLossesAction_);
+    airEvents->addLargeAction(showHoldsAction_);
+    ribbon_->setTabVisible("Air", false);
 
     auto* transit = ribbon_->addTab("Transit");
 
@@ -847,6 +941,7 @@ void MainWindow::setupRibbon() {
             {"Home", "getting-started.md"},
             {"View", "navigate-the-map.md"},
             {"Transit", "transit.md"},
+            {"Air", "air-traffic.md"},
             {"Analysis", "heatmap.md"},
             {"Scenario", "scenarios.md"},
             {"Export", "export.md"},
@@ -1225,8 +1320,9 @@ void MainWindow::loadFromPaths(const QString& networkPath, const QString& events
         setWindowTitle(QString("TAREEK-Vis - Simulation Visualizer  [%1]").arg(shortPath));
     }
 
-    // Remember this folder for Home > Recent Folders
-    addRecentFolder(networkInfo.absolutePath());
+    // Remember this folder for Home > Recent Folders. A scene capture is not
+    // the user's own work, so it stays out of the list.
+    if (!captureMode_) addRecentFolder(networkInfo.absolutePath());
 
     // Set up cache directory
     cacheDirectory_ = networkInfo.absolutePath() + "/.simvis_cache";
@@ -1271,6 +1367,13 @@ void MainWindow::loadFromPaths(const QString& networkPath, const QString& events
             cacheValid = false;
             LOG_INFO(QString("Cache .vidx version %1 != current %2 - will re-preprocess")
                 .arg(vidxVersion).arg(VIDX_FILE_VERSION));
+        }
+        // The same for the network: readBinaryHeader gives an empty header
+        // for a file of another version
+        if (cacheValid &&
+            NetworkParser::readBinaryHeader(networkBin.toStdString()).magic != NETWORK_FILE_MAGIC) {
+            cacheValid = false;
+            LOG_INFO("Cache .bin is of an older version - will re-preprocess");
         }
 
         LOG_INFO(QString("Cache check: bin=%1 vidx=%2 valid=%3")
@@ -1511,18 +1614,24 @@ void MainWindow::applyLoadedFiles(LoadedFiles& files, bool fromCache, const QStr
     // file's timestamp is the freshness mark for every cached map.
     heatmapSourceTime_ = QFileInfo(vidxPath).lastModified();
     populateHeatmapMenu();
+    populateOtherModesMenu();
+    populateAltitudeBandMenu();
+    ribbon_->setTabVisible("Air", mapWidget_->hasAirVehicles());
 
     // Compute the maps that are not cached yet, in the background, so the first
     // click on a type is instant. Deferred so the window is shown and painted
     // first, and it runs one map at a time on a worker thread.
-    QTimer::singleShot(0, this, [this]() { startHeatmapPrecompute(); });
+    // Not in a scene capture: the worker would share the CPU with the timed
+    // frames.
+    if (!captureMode_)
+        QTimer::singleShot(0, this, [this]() { startHeatmapPrecompute(); });
 
     // Fit view to network
     mapWidget_->fitToNetwork();
 
     // Hourly link volumes for the info panel, on a worker thread. The scan
     // touches every segment in the scenario, so it must not block the load.
-    startVolumeAggregation();
+    if (!captureMode_) startVolumeAggregation();
 
     // After the scan has started, so the panel waits for this run's volumes
     // rather than showing the last run's.
@@ -1558,6 +1667,57 @@ void MainWindow::applyLoadedFiles(LoadedFiles& files, bool fromCache, const QStr
         }
     }
     applyTransitData();
+    emit runLoaded();
+}
+
+void MainWindow::populateOtherModesMenu() {
+    // One checkable entry for each mode after the four with their own buttons
+    // (car, bus, rail, tram) that has vehicles in this run. A new run shows
+    // all of them again.
+    otherModesMenu_->clear();
+    std::vector<size_t> perMode(modes::all().size(), 0);
+    for (uint8_t id : vehicleIndex_->vehicleModes_)
+        if (id < perMode.size()) ++perMode[id];
+    for (const TrafficMode& mode : modes::all()) {
+        if (mode.id <= modes::kTram) continue;
+        mapWidget_->setModeVisible(mode.id, true);
+        if (perMode[mode.id] == 0) continue;
+        QAction* action = otherModesMenu_->addAction(
+            QString("%1 (%2)").arg(QString::fromUtf8(mode.name)).arg(perMode[mode.id]));
+        action->setCheckable(true);
+        action->setChecked(true);
+        const uint8_t id = mode.id;
+        connect(action, &QAction::toggled, this, [this, id](bool checked) {
+            mapWidget_->setModeVisible(id, checked);
+        });
+    }
+    otherModesMenu_->setEnabled(!otherModesMenu_->isEmpty());
+}
+
+void MainWindow::populateAltitudeBandMenu() {
+    // "All Heights", then bands of 300 m up to the highest node of the run.
+    // A new run shows all heights again.
+    altitudeBandMenu_->clear();
+    auto* group = new QActionGroup(altitudeBandMenu_);
+    auto addBand = [this, group](const QString& text, float minZ, float maxZ, bool checked) {
+        QAction* action = altitudeBandMenu_->addAction(text);
+        action->setCheckable(true);
+        action->setChecked(checked);
+        action->setActionGroup(group);
+        connect(action, &QAction::triggered, this, [this, minZ, maxZ]() {
+            mapWidget_->setAltitudeBand(minZ, maxZ);
+        });
+    };
+    addBand("All Heights", -1e9f, 1e9f, true);
+    mapWidget_->setAltitudeBand(-1e9f, 1e9f);
+    constexpr float kBandM = 300.0f;
+    const float top = mapWidget_->airTopHeight();
+    if (top > 0.0f) altitudeBandMenu_->addSeparator();
+    for (float low = 0.0f; low < top; low += kBandM) {
+        // The lowest band also holds a vehicle a little below the datum
+        addBand(QString("%1 to %2 m").arg(low, 0, 'f', 0).arg(low + kBandM, 0, 'f', 0),
+                low == 0.0f ? -1e9f : low, low + kBandM, false);
+    }
 }
 
 void MainWindow::startVolumeAggregation() {
@@ -2167,7 +2327,7 @@ void MainWindow::onVehicleTrackingChanged(uint32_t vehicleId) {
     // when it stops. The panel keeps what the search put there.
     if (searchTracking_) return;
 
-    if (vehicleId == 0) {
+    if (vehicleId == kNoVehicle) {
         // Tracking stopped (e.g. user clicked empty map to pan). Keep the
         // panel content and any route overlay so panning doesn't wipe them.
         return;
@@ -2200,7 +2360,7 @@ void MainWindow::inspectPerson(uint32_t personId) {
     infoShowsPerson_ = true;
 
     // Their own car: the first vehicle of the day that they drive
-    infoVehicleId_ = 0;
+    infoVehicleId_ = kNoVehicle;
     if (const auto* trips = vehicleIndex_->personTrips(personId)) {
         for (const PersonTrip& trip : *trips) {
             if (trip.vehicleId != 0 &&
@@ -2427,15 +2587,15 @@ void MainWindow::refreshVehicleInfoPanel() {
     // A person found by the search stays in the panel, whatever vehicle the
     // halo is on.
     uint32_t vehicleId = infoShowsPerson_ ? infoVehicleId_ : mapWidget_->trackedVehicle();
-    if (vehicleId == 0) vehicleId = infoVehicleId_;
+    if (vehicleId == kNoVehicle) vehicleId = infoVehicleId_;
     if (!vehicleIndex_) return;
-    if (vehicleId == 0 && !(infoShowsPerson_ && routePersonPlus1_ != 0)) return;
+    if (vehicleId == kNoVehicle && !(infoShowsPerson_ && routePersonPlus1_ != 0)) return;
 
     VehicleInfo info;
     info.currentTime = mapWidget_->simulationTime();
     const TimeMs nowMs = VehicleIndex::toTimeMs(info.currentTime);
 
-    if (vehicleId == 0) {
+    if (vehicleId == kNoVehicle) {
         // A person with no car of their own: their trips only
         fillPersonTrips(info, routePersonPlus1_ - 1, nowMs);
         selectedLinkId_ = kNoLink;
@@ -2447,12 +2607,7 @@ void MainWindow::refreshVehicleInfoPanel() {
     info.vehicleName = vehicleIndex_->vehicleIdString(vehicleId);
 
     const bool isTransit = vehicleIndex_->isTransitVehicle(vehicleId);
-    switch (vehicleIndex_->getVehicleMode(vehicleId)) {
-        case TransitMode::Bus:  info.mode = "Bus"; break;
-        case TransitMode::Tram: info.mode = "Tram"; break;
-        case TransitMode::Rail: info.mode = "Rail"; break;
-        default:                info.mode = "Car"; break;
-    }
+    info.mode = QString::fromUtf8(modes::get(vehicleIndex_->modeId(vehicleId)).name);
 
     // Live state (speed / on-network status)
     const VehicleState* state = mapWidget_->vehicleState(vehicleId);
@@ -2462,6 +2617,21 @@ void MainWindow::refreshVehicleInfoPanel() {
         if (networkIndex_) {
             if (const auto* link = networkIndex_->getLink(state->currentLink)) {
                 info.speedKmh = state->speedRatio * link->freespeed * 3.6f;
+                if (state->is3D) {
+                    info.hasHeight = true;
+                    info.heightM = state->z;
+                    info.verticalRate = state->verticalRate;
+                    switch (static_cast<RoadType>(link->roadType)) {
+                        case RoadType::AirVertical:
+                            info.phase = state->verticalRate >= 0.0f ? "Take-off" : "Landing";
+                            break;
+                        case RoadType::AirClimb:   info.phase = "Climb"; break;
+                        case RoadType::AirCruise:  info.phase = "Cruise"; break;
+                        case RoadType::AirDescent: info.phase = "Descent"; break;
+                        case RoadType::AirHover:   info.phase = "Hover"; break;
+                        default: break;
+                    }
+                }
             }
         }
     }
@@ -2510,7 +2680,14 @@ void MainWindow::fillPersonTrips(VehicleInfo& info, uint32_t personId, TimeMs no
 }
 
 void MainWindow::onActiveVehicleCountChanged(size_t count) {
-    vehicleCountLabel_->setText(QString("Vehicles: %1").arg(count));
+    QString text = QString("Vehicles: %1").arg(count);
+    // A run with aircraft: also the aircraft, losses and holds now
+    if (mapWidget_->hasAirVehicles()) {
+        const MapWidget::AirStatus air = mapWidget_->airStatus();
+        text += QString("  |  Aircraft: %1  |  Losses: %2  |  Holds: %3")
+                    .arg(air.aircraft).arg(air.losses).arg(air.holds);
+    }
+    vehicleCountLabel_->setText(text);
 }
 
 void MainWindow::onShowNodesToggled(bool checked) {
@@ -2682,24 +2859,6 @@ void MainWindow::onLoadCounts() {
 
     if (countsPath.isEmpty()) return;
 
-    LOG_INFO(QString("Loading counts file: %1").arg(countsPath));
-    statusLabel_->setText("Loading counts...");
-    QApplication::processEvents();
-
-    // Parse counts.xml
-    countsData_ = CountsParser::parse(
-        countsPath.toStdString(),
-        *networkIndex_);
-
-    if (!countsData_ || countsData_->counts.empty()) {
-        QMessageBox::warning(this, "Load Counts",
-            "No valid count locations found in the file.\n"
-            "Check that loc_id values match network link IDs.");
-        countsData_.reset();
-        statusLabel_->setText("Counts loading failed");
-        return;
-    }
-
     // Ask user for countsScaleFactor
     bool ok = false;
     double scaleFactor = QInputDialog::getDouble(
@@ -2718,9 +2877,33 @@ void MainWindow::onLoadCounts() {
         &ok
     );
     if (!ok) {
-        countsData_.reset();
         statusLabel_->setText("Counts loading cancelled");
         return;
+    }
+
+    if (!loadCounts(countsPath, scaleFactor)) {
+        QMessageBox::warning(this, "Load Counts",
+            "No valid count locations found in the file.\n"
+            "Check that loc_id values match network link IDs.");
+    }
+}
+
+bool MainWindow::loadCounts(const QString& countsPath, double scaleFactor) {
+    if (!networkIndex_ || !vehicleIndex_) return false;
+
+    LOG_INFO(QString("Loading counts file: %1").arg(countsPath));
+    statusLabel_->setText("Loading counts...");
+    QApplication::processEvents();
+
+    // Parse counts.xml
+    countsData_ = CountsParser::parse(
+        countsPath.toStdString(),
+        *networkIndex_);
+
+    if (!countsData_ || countsData_->counts.empty()) {
+        countsData_.reset();
+        statusLabel_->setText("Counts loading failed");
+        return false;
     }
 
     // Remember the sample rate the user just told us about. The link histogram
@@ -2759,6 +2942,33 @@ void MainWindow::onLoadCounts() {
     if (selectedLinkId_ != kNoLink) {
         onNetworkLinkClicked(selectedLinkId_);
     }
+    return true;
+}
+
+void MainWindow::findForCapture(const QString& id) {
+    searchEdit_->setText(id);
+    onFind();
+}
+
+bool MainWindow::selectLinkForCapture(const QString& linkId) {
+    if (!networkIndex_) return false;
+    const uint32_t id = networkIndex_->findLinkByOriginalId(linkId.toStdString());
+    if (id == UINT32_MAX) return false;
+    onNetworkLinkCtrlClicked(id);
+    return true;
+}
+
+QWidget* MainWindow::showCountChartForCapture(const QString& linkId) {
+    if (!networkIndex_ || !countsData_) return nullptr;
+    const uint32_t id = networkIndex_->findLinkByOriginalId(linkId.toStdString());
+    if (id == UINT32_MAX || !countsData_->linkToCount.count(id)) return nullptr;
+    onCountLinkClicked(id);
+    const auto dialogs = findChildren<CountsChartDialog*>();
+    return dialogs.isEmpty() ? nullptr : dialogs.last();
+}
+
+QWidget* MainWindow::sidePanel() const {
+    return sidePanel_;
 }
 
 void MainWindow::onShowCountsToggled(bool checked) {
@@ -2774,6 +2984,12 @@ static QString roadTypeName(RoadType t) {
         case RoadType::Residential: return "Residential";
         case RoadType::Service:     return "Service";
         case RoadType::Other:       return "Other";
+        case RoadType::AirVertical: return "Air: vertical";
+        case RoadType::AirClimb:    return "Air: climb";
+        case RoadType::AirCruise:   return "Air: cruise";
+        case RoadType::AirDescent:  return "Air: descent";
+        case RoadType::AirHover:    return "Air: hover";
+        case RoadType::AirOther:    return "Air: other";
         default:                    return "Unknown";
     }
 }
@@ -2791,7 +3007,7 @@ void MainWindow::onNetworkLinkClicked(uint32_t linkId) {
     mapWidget_->clearAllHighlights();
     infoPanel_->resetPersonRouteState();
     routePersonPlus1_ = 0;
-    infoVehicleId_ = 0;
+    infoVehicleId_ = kNoVehicle;
     infoShowsPerson_ = false;
     mapWidget_->highlightLink(linkId);
 

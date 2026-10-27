@@ -11,6 +11,16 @@ Use the **View > Vehicles** group:
 | Bus | Buses. |
 | Tram | Trams. |
 | Rail | Trains. |
+| Other Modes | A list of the other modes in the run, for example aircraft, taxis or bikes, with the number of vehicles. Clear a mode to hide its vehicles. |
+
+TAREEK-Vis finds the mode of a vehicle in this order:
+
+1. The transit schedule gives the buses, trams and trains.
+2. The leg mode of the driver's trip gives the other modes. For example, the
+   leg mode `uam` gives an aircraft, `taxi` gives a taxi and `bike` gives a
+   bike.
+3. A vehicle that starts on an air link is an aircraft.
+4. All other vehicles are cars.
 
 ## Change how vehicles look
 
@@ -18,7 +28,7 @@ Use the **View > Vehicle Style** group:
 
 | Button | Choices |
 |--------|---------|
-| Shape | Auto (by mode), Circle, Triangle (Arrow), Rectangle, Diamond. Auto is the default. |
+| Shape | Auto (by mode), Circle, Triangle (Arrow), Rectangle, Diamond. Auto is the default. With Auto, aircraft show as an aircraft symbol. |
 | Size | Small (3 px), Medium (5 px), Large (8 px). Large is the default. |
 | Color | By Speed (the default) or By Mode (icons). |
 
@@ -36,7 +46,9 @@ free speed of its link:
 Click a vehicle. A halo shows on the vehicle and the map follows it. The
 **Info** page of the side panel shows:
 
-- For a car: the ID of the driver and the trips of the driver for the day.
+- The mode of the vehicle, for example Car, Bus or Aircraft.
+- For a car or an aircraft: the ID of the driver and the trips of the driver
+  for the day.
 - For a bus, tram or train: the line, the route and the passengers aboard
   now. Click a passenger to see the day of that person.
 

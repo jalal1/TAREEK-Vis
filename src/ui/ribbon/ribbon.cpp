@@ -264,6 +264,18 @@ QString RibbonBar::currentTabTitle() const {
     return tabBar_->tabText(tabBar_->currentIndex());
 }
 
+void RibbonBar::setTabVisible(const QString& title, bool visible) {
+    for (int i = 0; i < tabBar_->count(); ++i) {
+        if (tabBar_->tabText(i) != title) continue;
+        // A hidden tab must not stay in front
+        if (!visible && tabBar_->currentIndex() == i) tabBar_->setCurrentIndex(0);
+        tabBar_->setTabVisible(i, visible);
+        // QTabBar does not tell the layout that its size changed. Without
+        // this, the row keeps the old width and shows scroll arrows.
+        tabBar_->updateGeometry();
+    }
+}
+
 RibbonPage* RibbonBar::addTab(const QString& title) {
     auto* page = new RibbonPage(this, pages_);
     pages_->addWidget(page);

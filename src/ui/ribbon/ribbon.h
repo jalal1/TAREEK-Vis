@@ -105,6 +105,9 @@ public:
     // The title of the tab in front, for help on that tab
     QString currentTabTitle() const;
 
+    // Show or hide a tab, for example a tab that only some runs need
+    void setTabVisible(const QString& title, bool visible);
+
     bool isCollapsed() const { return collapsed_; }
     // Checkable action for Ctrl+F1 and the button at the right of the tabs
     QAction* collapseAction() const { return collapseAction_; }

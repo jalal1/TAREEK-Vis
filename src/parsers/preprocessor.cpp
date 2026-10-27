@@ -1,6 +1,7 @@
 #include "preprocessor.h"
 #include "data/vehicle_index.h"
 #include "core/logger.h"
+#include "core/modes.h"
 #include <QDir>
 #include <QFileInfo>
 #include <filesystem>
@@ -37,8 +38,12 @@ void Preprocessor::setOutputDirectory(const QString& path) {
 }
 
 bool Preprocessor::hasCachedFiles() const {
+    // A file of an older format counts as missing, so it is made again
     return QFileInfo::exists(networkBinaryPath()) &&
-           QFileInfo::exists(vehicleIndexPath());
+           QFileInfo::exists(vehicleIndexPath()) &&
+           NetworkParser::readBinaryHeader(networkBinaryPath().toStdString()).magic
+               == NETWORK_FILE_MAGIC &&
+           VehicleIndex::fileVersion(vehicleIndexPath()) == VIDX_FILE_VERSION;
 }
 
 QString Preprocessor::networkBinaryPath() const {
@@ -258,6 +263,9 @@ void Preprocessor::writeVehicleIndex() {
         emit progressChanged(97, QString("Classified %1 transit vehicles").arg(classified));
     }
 
+    classifyVehicleModes();
+    placeHolds();
+
     emit progressChanged(98, "Writing vehicle index...");
 
     // Move the events-side ID interners into the index so they are serialized
@@ -277,6 +285,89 @@ void Preprocessor::writeVehicleIndex() {
     }
 
     eventsResult_.reset();
+}
+
+void Preprocessor::classifyVehicleModes() {
+    // The transit schedule has set the transit modes. For every other
+    // vehicle, the mode comes from the leg mode of its driver's trip in it,
+    // through the mode registry. Only the driver counts, so a passenger's
+    // "pt" leg does not change a bus. Last, a vehicle that starts on an air
+    // link is an aircraft, for files without person events.
+    auto& vidx = eventsResult_->vehicleIndex;
+    std::vector<uint8_t> modeOfLeg(vidx.legModeStrings_.size());
+    for (size_t i = 0; i < modeOfLeg.size(); ++i)
+        modeOfLeg[i] = modes::fromLegMode(vidx.legModeStrings_.strings()[i]);
+
+    const auto& links = networkResult_->links;
+    std::vector<size_t> perMode(modes::all().size(), 0);
+    for (size_t v = 0; v < vidx.vehicles_.size(); ++v) {
+        uint8_t& mode = vidx.vehicleModes_[v];
+        if (mode != modes::kCar) {
+            if (mode < perMode.size()) ++perMode[mode];
+            continue;
+        }
+        const uint32_t driver = v < vidx.driverOfVehicle_.size() ? vidx.driverOfVehicle_[v] : 0;
+        if (driver != 0 && driver - 1 < vidx.personTrips_.size()) {
+            for (const PersonTrip& trip : vidx.personTrips_[driver - 1]) {
+                if (trip.vehicleId != v + 1 || trip.legModeId >= modeOfLeg.size()) continue;
+                if (modeOfLeg[trip.legModeId] != modes::kNone) {
+                    mode = modeOfLeg[trip.legModeId];
+                    break;
+                }
+            }
+        }
+        // Network links are interned in file order, so link id i is
+        // normally links[i]; the id test covers a file with a repeated id
+        const auto& segments = vidx.vehicles_[v].segments;
+        const uint32_t first = segments.empty() ? kNoLinkId : segments.front().linkId;
+        if (mode == modes::kCar && first < links.size() && links[first].id == first &&
+            isAirRoadType(static_cast<RoadType>(links[first].roadType))) {
+            mode = modes::kAir;
+        }
+        ++perMode[mode];
+    }
+    for (size_t m = 0; m < perMode.size(); ++m) {
+        if (perMode[m] == 0) continue;
+        LOG_INFO(QString("Preprocessor: %1 vehicles of mode %2")
+            .arg(perMode[m]).arg(modes::all()[m].key));
+    }
+}
+
+void Preprocessor::placeHolds() {
+    // A hold is at a vertiport, and the event names it only by id. A ground
+    // hold is at the start of the flight (the from-node of its first
+    // segment), an airborne hold at its end (the to-node of its last one).
+    auto& vidx = eventsResult_->vehicleIndex;
+    if (vidx.overlayEvents_.empty()) return;
+    const auto& net = *networkResult_;
+    auto nodeOf = [&net](uint32_t linkId, bool from) -> const NodeRecord* {
+        if (linkId >= net.links.size() || net.links[linkId].id != linkId) return nullptr;
+        const uint32_t n = from ? net.links[linkId].fromNode : net.links[linkId].toNode;
+        return (n < net.nodes.size() && net.nodes[n].id == n) ? &net.nodes[n] : nullptr;
+    };
+
+    size_t counts[4] = {0, 0, 0, 0};
+    size_t unplaced = 0;
+    for (OverlayEvent& ev : vidx.overlayEvents_) {
+        if (ev.kind < 4) ++counts[ev.kind];
+        if (ev.kind == static_cast<uint8_t>(OverlayKind::Loss)) continue;
+        const bool ground = ev.kind == static_cast<uint8_t>(OverlayKind::GroundHold);
+        const NodeRecord* node = nullptr;
+        if (ev.vehicleA < vidx.vehicles_.size() && !vidx.vehicles_[ev.vehicleA].segments.empty()) {
+            const auto& segs = vidx.vehicles_[ev.vehicleA].segments;
+            node = nodeOf(ground ? segs.front().linkId : segs.back().linkId, ground);
+        }
+        if (node) {
+            ev.x = node->x;
+            ev.y = node->y;
+            ev.flags |= OVERLAY_FLAG_PLACED;
+        } else {
+            ++unplaced;
+        }
+    }
+    LOG_INFO(QString("Preprocessor: overlay events: %1 losses, %2 ground holds, "
+                     "%3 airborne holds (%4 holds without a position)")
+        .arg(counts[1]).arg(counts[2]).arg(counts[3]).arg(unplaced));
 }
 
 void Preprocessor::processAll() {

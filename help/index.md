@@ -24,6 +24,7 @@ open.
 - [Road links and hourly volume](road-links.md)
 - [Compare with traffic counts](counts.md)
 - [Public transit](transit.md)
+- [Air traffic](air-traffic.md)
 - [Activity heatmap](heatmap.md)
 - [What-if scenarios](scenarios.md)
 

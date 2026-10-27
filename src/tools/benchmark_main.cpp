@@ -33,6 +33,7 @@
 
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <map>
 #include <memory>
@@ -43,6 +44,7 @@
 #include "analysis/nkdv_network.h"
 #include "core/logger.h"
 #include "data/network_index.h"
+#include "core/modes.h"
 #include "data/vehicle_index.h"
 #include "parsers/preprocessor.h"
 
@@ -315,9 +317,20 @@ int cmdStats(const QString& scenarioDir) {
     if (!loadIndices(scenarioDir, network, vehicles)) return 2;
 
     size_t segments = 0;
-    for (size_t v = 0; v < vehicles->vehicleCount(); ++v)
-        if (const auto* t = vehicles->trajectory(static_cast<uint32_t>(v)))
+    std::map<QString, qint64> vehiclesByMode, segmentsByMode;
+    for (size_t v = 0; v < vehicles->vehicleCount(); ++v) {
+        const auto* t = vehicles->trajectory(static_cast<uint32_t>(v));
+        const QString mode = QString::fromUtf8(
+            simvis::modes::get(vehicles->modeId(static_cast<uint32_t>(v))).key);
+        ++vehiclesByMode[mode];
+        if (t) {
             segments += t->segments.size();
+            segmentsByMode[mode] += qint64(t->segments.size());
+        }
+    }
+    QJsonObject vehicleModes, segmentModes;
+    for (const auto& [mode, count] : vehiclesByMode) vehicleModes[mode] = count;
+    for (const auto& [mode, count] : segmentsByMode) segmentModes[mode] = count;
 
     size_t trips = 0;
     for (size_t p = 0; p < vehicles->personCount(); ++p)
@@ -332,6 +345,30 @@ int cmdStats(const QString& scenarioDir) {
     for (const auto& [name, count] : byType)
         types[name] = qint64(count);
 
+    // Height range of the nodes and the air links (tareek-air output)
+    double zMin = 0.0, zMax = 0.0;
+    if (!network->allNodes().empty()) {
+        zMin = zMax = network->allNodes().front().z;
+        for (const auto& node : network->allNodes()) {
+            zMin = std::min<double>(zMin, node.z);
+            zMax = std::max<double>(zMax, node.z);
+        }
+    }
+    size_t airLinks = 0;
+    for (const auto& link : network->allLinks())
+        if (simvis::isAirRoadType(static_cast<simvis::RoadType>(link.roadType))) ++airLinks;
+
+    // Air overlay events (tareek-air): count by kind, and holds with a place
+    qint64 losses = 0, groundHolds = 0, airHolds = 0, placedHolds = 0;
+    for (const auto& ev : vehicles->overlayEvents()) {
+        switch (static_cast<simvis::OverlayKind>(ev.kind)) {
+            case simvis::OverlayKind::Loss:       ++losses; break;
+            case simvis::OverlayKind::GroundHold: ++groundHolds; break;
+            case simvis::OverlayKind::AirHold:    ++airHolds; break;
+        }
+        if (ev.flags & simvis::OVERLAY_FLAG_PLACED) ++placedHolds;
+    }
+
     const auto& bounds = network->bounds();
     emitRecord(QJsonObject{
         {"experiment", "stats"},
@@ -341,6 +378,8 @@ int cmdStats(const QString& scenarioDir) {
         {"vehicles", qint64(vehicles->vehicleCount())},
         {"persons", qint64(vehicles->personCount())},
         {"segments", qint64(segments)},
+        {"vehicles_by_mode", vehicleModes},
+        {"segments_by_mode", segmentModes},
         {"trips", qint64(trips)},
         {"activities", qint64(vehicles->activityCount())},
         {"activity_types", types},
@@ -348,6 +387,14 @@ int cmdStats(const QString& scenarioDir) {
         {"sim_end_s", vehicles->maxTime() / 1000.0},
         {"extent_m_x", bounds.width()},
         {"extent_m_y", bounds.height()},
+        {"z_min", zMin},
+        {"z_max", zMax},
+        {"air_links", qint64(airLinks)},
+        {"losses", losses},
+        {"ground_holds", groundHolds},
+        {"air_holds", airHolds},
+        {"holds_placed", placedHolds},
+        {"overlay_bytes", qint64(vehicles->overlayEvents().size() * sizeof(simvis::OverlayEvent))},
         // Structure bytes, from the record sizes -- not allocator overhead, so
         // this will not sum to RSS. Both are reported so the gap is visible.
         {"segment_bytes", qint64(segments * sizeof(simvis::VehicleSegment))},

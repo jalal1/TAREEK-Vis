@@ -124,8 +124,10 @@ EventParser::StreamResult EventParser::streamProcessEvents(
         StringInterner mutableLinkIds = linkIds;
 
         // Vehicle index building state
+        // linkId is TRIP_NO_LINK when the event had no link. Id 0 is a real
+        // link (the first one interned), so it cannot mean "none".
         struct OpenSegment {
-            uint32_t linkId = 0;
+            uint32_t linkId = TRIP_NO_LINK;
             TimeMs enterTime = 0;
             bool valid = false;
         };
@@ -137,7 +139,7 @@ EventParser::StreamResult EventParser::streamProcessEvents(
         struct PersonState {
             uint16_t lastActEndType = TRIP_NO_ACT; // set by actend, consumed by next departure
             TimeMs departTimeMs = 0;
-            LinkId departLinkId = 0;
+            LinkId departLinkId = TRIP_NO_LINK;
             uint16_t legModeId = 0;
             uint32_t currentVehicle = 0;           // vehicleId+1 while in a vehicle
             TimeMs boardTimeMs = TRIP_NO_TIME;     // when it entered currentVehicle
@@ -150,6 +152,14 @@ EventParser::StreamResult EventParser::streamProcessEvents(
         };
         std::vector<PersonState> personStates;
         auto& vidx = result.vehicleIndex;          // trip data goes straight into the index
+
+        // Open loss and hold intervals (tareek-air), by vehicle pair or by
+        // vehicle, as indices into vidx.overlayEvents_
+        std::unordered_map<uint64_t, size_t> openLosses;
+        std::unordered_map<uint32_t, size_t> openHolds;
+        auto pairKey = [](uint32_t a, uint32_t b) {
+            return (static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b);
+        };
 
         auto growPersonArrays = [&]() {
             size_t n = result.personIds.size();
@@ -283,7 +293,7 @@ EventParser::StreamResult EventParser::streamProcessEvents(
                     growPersonArrays();
                     auto& ps = personStates[personId];
                     ps.departTimeMs = eventTimeMs;
-                    ps.departLinkId = 0;
+                    ps.departLinkId = TRIP_NO_LINK;
                     if (!linkStr.empty()) {
                         if (mutableLinkIds.hasString(linkStr))
                             ps.departLinkId = mutableLinkIds.getId(linkStr);
@@ -404,6 +414,75 @@ EventParser::StreamResult EventParser::streamProcessEvents(
                     // nothing to record here.
                     continue;
 
+                // tareek-air: losses of separation and holds. The position of a
+                // hold (its vertiport) is set by the preprocessor from the
+                // flight, because the event names the vertiport only by id.
+                case EventType::UamLosStart:
+                case EventType::UamLosEnd: {
+                    std::string_view aStr = getAttrView(data, len, "vehicle", 7);
+                    std::string_view bStr = getAttrView(data, len, "vehicle2", 8);
+                    if (aStr.empty() || bStr.empty()) continue;
+                    const uint32_t a = result.vehicleIds.intern(aStr);
+                    const uint32_t b = result.vehicleIds.intern(bStr);
+                    const uint64_t key = pairKey(a, b);
+                    if (type == EventType::UamLosStart) {
+                        OverlayEvent ev{};
+                        ev.startMs = eventTimeMs;
+                        ev.endMs = TRIP_NO_TIME;
+                        ev.vehicleA = a;
+                        ev.vehicleB = b;
+                        ev.kind = static_cast<uint8_t>(OverlayKind::Loss);
+                        std::string_view minH = getAttrView(data, len, "min_horizontal_m", 16);
+                        if (!minH.empty()) ev.value = fastParseFloat(minH);
+                        if (getAttrView(data, len, "zone", 4) == "terminal")
+                            ev.flags |= OVERLAY_FLAG_TERMINAL;
+                        openLosses[key] = vidx.overlayEvents_.size();
+                        vidx.overlayEvents_.push_back(ev);
+                    } else if (auto it = openLosses.find(key); it != openLosses.end()) {
+                        vidx.overlayEvents_[it->second].endMs = eventTimeMs;
+                        openLosses.erase(it);
+                    }
+                    continue;
+                }
+
+                case EventType::UamGroundHold: {
+                    std::string_view vehStr = getAttrView(data, len, "vehicle", 7);
+                    std::string_view durStr = getAttrView(data, len, "duration_s", 10);
+                    if (vehStr.empty()) continue;
+                    OverlayEvent ev{};
+                    ev.startMs = eventTimeMs;
+                    ev.value = durStr.empty() ? 0.0f : fastParseFloat(durStr);
+                    ev.endMs = eventTimeMs + static_cast<TimeMs>(ev.value * 1000.0f + 0.5f);
+                    ev.vehicleA = result.vehicleIds.intern(vehStr);
+                    ev.vehicleB = kNoVehicle;
+                    ev.kind = static_cast<uint8_t>(OverlayKind::GroundHold);
+                    vidx.overlayEvents_.push_back(ev);
+                    continue;
+                }
+
+                case EventType::UamHoldStart:
+                case EventType::UamHoldEnd: {
+                    std::string_view vehStr = getAttrView(data, len, "vehicle", 7);
+                    if (vehStr.empty()) continue;
+                    const uint32_t a = result.vehicleIds.intern(vehStr);
+                    if (type == EventType::UamHoldStart) {
+                        OverlayEvent ev{};
+                        ev.startMs = eventTimeMs;
+                        ev.endMs = TRIP_NO_TIME;
+                        ev.vehicleA = a;
+                        ev.vehicleB = kNoVehicle;
+                        ev.kind = static_cast<uint8_t>(OverlayKind::AirHold);
+                        openHolds[a] = vidx.overlayEvents_.size();
+                        vidx.overlayEvents_.push_back(ev);
+                    } else if (auto it = openHolds.find(a); it != openHolds.end()) {
+                        auto& ev = vidx.overlayEvents_[it->second];
+                        ev.endMs = eventTimeMs;
+                        ev.value = static_cast<float>(eventTimeMs - ev.startMs) / 1000.0f;
+                        openHolds.erase(it);
+                    }
+                    continue;
+                }
+
                 case EventType::TransitDriverStarts: {
                     std::string_view driverStr = getAttrView(data, len, "driverId", 8);
                     std::string_view vehStr = getAttrView(data, len, "vehicleId", 9);
@@ -444,12 +523,12 @@ EventParser::StreamResult EventParser::streamProcessEvents(
             std::string_view vehicleStr = getAttrView(data, len, "vehicle", 7);
             std::string_view linkStr = getAttrView(data, len, "link", 4);
 
-            uint32_t vehicleId = 0;
-            uint32_t linkId = 0;
-
-            if (!vehicleStr.empty()) {
-                vehicleId = result.vehicleIds.intern(vehicleStr);
-            }
+            // An event without a vehicle cannot extend a trajectory. Test the
+            // attribute, not the id: the interner gives id 0 to the first
+            // vehicle of the file, which is a real vehicle.
+            if (vehicleStr.empty()) continue;
+            const uint32_t vehicleId = result.vehicleIds.intern(vehicleStr);
+            uint32_t linkId = TRIP_NO_LINK;
             if (!linkStr.empty()) {
                 if (mutableLinkIds.hasString(linkStr)) {
                     linkId = mutableLinkIds.getId(linkStr);
@@ -465,8 +544,6 @@ EventParser::StreamResult EventParser::streamProcessEvents(
                 openSegments.resize(vehicleCount);
             }
 
-            if (vehicleId == 0 && type != EventType::VehicleEntersTraffic)
-                continue;
             if (vehicleId >= vehicleCount) continue;
 
             TimeMs timeMs = eventTimeMs;
@@ -483,7 +560,7 @@ EventParser::StreamResult EventParser::streamProcessEvents(
 
                 case EventType::EnteredLink: {
                     auto& open = openSegments[vehicleId];
-                    if (open.valid && open.linkId != 0) {
+                    if (open.valid && open.linkId != TRIP_NO_LINK) {
                         VehicleSegment seg;
                         seg.enterTime = open.enterTime;
                         seg.leaveTime = timeMs;
@@ -500,7 +577,7 @@ EventParser::StreamResult EventParser::streamProcessEvents(
 
                 case EventType::LeftLink: {
                     auto& open = openSegments[vehicleId];
-                    if (open.valid && open.linkId == linkId) {
+                    if (open.valid && open.linkId == linkId && linkId != TRIP_NO_LINK) {
                         VehicleSegment seg;
                         seg.enterTime = open.enterTime;
                         seg.leaveTime = timeMs;
@@ -515,7 +592,7 @@ EventParser::StreamResult EventParser::streamProcessEvents(
 
                 case EventType::VehicleLeavesTraffic: {
                     auto& open = openSegments[vehicleId];
-                    if (open.valid && open.linkId != 0) {
+                    if (open.valid && open.linkId != TRIP_NO_LINK) {
                         VehicleSegment seg;
                         seg.enterTime = open.enterTime;
                         seg.leaveTime = timeMs;

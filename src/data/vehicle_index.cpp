@@ -1,5 +1,6 @@
 #include "vehicle_index.h"
 #include "core/logger.h"
+#include "core/modes.h"
 #include <fstream>
 #include <algorithm>
 #include <cstddef>
@@ -14,13 +15,13 @@ namespace simvis {
 // ============================================================================
 
 TransitMode VehicleIndex::getVehicleMode(VehicleId id) const {
-    if (id >= vehicleModes_.size()) return TransitMode::Unknown;
-    return static_cast<TransitMode>(vehicleModes_[id]);
+    return isTransitVehicle(id) ? static_cast<TransitMode>(vehicleModes_[id])
+                                : TransitMode::Unknown;
 }
 
 bool VehicleIndex::isTransitVehicle(VehicleId id) const {
     if (id >= vehicleModes_.size()) return false;
-    return vehicleModes_[id] != 0;
+    return modes::get(vehicleModes_[id]).modeClass == ModeClass::Transit;
 }
 
 void VehicleIndex::buildLookupArrays() {
@@ -266,8 +267,9 @@ bool VehicleIndex::writeFile(const QString& path, const VehicleIndex& index) {
         // read sequentially, so their end offset is not known until they are
         // written. loadFile() seeks here using the count, after the tables.
         header.activityCount = static_cast<uint32_t>(index.activities_.size());
-        header.reserved = 0;
+        header.overlayCount = static_cast<uint32_t>(index.overlayEvents_.size());
         header.activityDataOffset = 0;  // patched below, once the tables are out
+        header.overlayDataOffset = 0;
 
         // Write header
         out.write(reinterpret_cast<const char*>(&header), sizeof(header));
@@ -357,8 +359,17 @@ bool VehicleIndex::writeFile(const QString& path, const VehicleIndex& index) {
                       static_cast<std::streamsize>(
                           index.activities_.size() * sizeof(ActivityRecord)));
         }
+        // Overlay events after the activities
+        uint64_t overlayOffset = static_cast<uint64_t>(out.tellp());
+        if (!index.overlayEvents_.empty()) {
+            out.write(reinterpret_cast<const char*>(index.overlayEvents_.data()),
+                      static_cast<std::streamsize>(
+                          index.overlayEvents_.size() * sizeof(OverlayEvent)));
+        }
         out.seekp(offsetof(VehicleIndexHeader, activityDataOffset));
         out.write(reinterpret_cast<const char*>(&activityOffset), sizeof(activityOffset));
+        out.seekp(offsetof(VehicleIndexHeader, overlayDataOffset));
+        out.write(reinterpret_cast<const char*>(&overlayOffset), sizeof(overlayOffset));
 
         out.flush();
         bool ok = out.good();
@@ -568,6 +579,29 @@ bool VehicleIndex::loadFile(const QString& path) {
             if (in.gcount() != static_cast<std::streamsize>(
                     static_cast<size_t>(header.activityCount) * sizeof(ActivityRecord))) {
                 LOG_ERROR(QString("VehicleIndex::loadFile: short read on activities in %1")
+                    .arg(path));
+                return false;
+            }
+        }
+
+        // Read packed overlay events (v6), after the activities
+        overlayEvents_.clear();
+        if (header.overlayCount > 0) {
+            constexpr uint32_t kMaxOverlays = 100'000'000;
+            if (header.overlayCount > kMaxOverlays || header.overlayDataOffset == 0) {
+                LOG_ERROR(QString("VehicleIndex::loadFile: bad overlay table "
+                                  "(count=%1, offset=%2) in %3")
+                    .arg(header.overlayCount).arg(header.overlayDataOffset).arg(path));
+                return false;
+            }
+            in.clear();
+            in.seekg(static_cast<std::streamoff>(header.overlayDataOffset));
+            overlayEvents_.resize(header.overlayCount);
+            const auto bytes = static_cast<std::streamsize>(
+                static_cast<size_t>(header.overlayCount) * sizeof(OverlayEvent));
+            in.read(reinterpret_cast<char*>(overlayEvents_.data()), bytes);
+            if (in.gcount() != bytes) {
+                LOG_ERROR(QString("VehicleIndex::loadFile: short read on overlays in %1")
                     .arg(path));
                 return false;
             }

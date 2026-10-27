@@ -216,7 +216,7 @@ using panelstyle::modeIcon;
 
 void InfoPanel::showVehicleInfo(const VehicleInfo& info) {
     clearContent();
-    titleLabel_->setText(info.vehicleId == 0 ? "Person Info" : "Vehicle Info");
+    titleLabel_->setText(info.vehicleId == kNoVehicle ? "Person Info" : "Vehicle Info");
 
     // Header: person id for driver panels ("person_8509"); transit vehicles
     // keep their vehicle name ("Tram — veh_6760_tram")
@@ -238,6 +238,15 @@ void InfoPanel::showVehicleInfo(const VehicleInfo& info) {
     }
     if (copyId.isEmpty()) addHeader(title);
     else addHeader(title, copyId);
+
+    // Flight section (aircraft on the network)
+    if (info.hasHeight) {
+        addDivider();
+        addHeader("Flight");
+        addBody(QString("Height: %1 m").arg(info.heightM, 0, 'f', 0));
+        addBody(QString("Vertical rate: %1 m/s").arg(info.verticalRate, 0, 'f', 1));
+        if (!info.phase.isEmpty()) addBody(QString("Phase: %1").arg(info.phase));
+    }
 
     // Transit service section
     if (info.passengerCount >= 0) {

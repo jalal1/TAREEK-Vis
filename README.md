@@ -54,15 +54,20 @@ here once available, along with the official ACM DOI link.
 
 - Open a MATSim run (network, events and an optional transit schedule) and
   play the vehicles over the day.
-- All commands on a ribbon, with a search box and a built-in user guide (F1).
+- All commands on a ribbon, with a search box and a built-in user guide (F1)
+  that you can search.
 - Click a vehicle to see the trips of its driver, or the passengers of a
   transit vehicle. Show the route of a person on the map.
 - Find a link, a person or a vehicle by its ID.
 - Click a road to see its details and its hourly traffic volume.
-- Compare simulated volumes with traffic counts.
+- Compare simulated volumes with traffic counts. Export the chart of each
+  count station and a table of the totals, the ratio and the GEH.
 - Show bus, tram and rail routes and stops.
 - Show the density of each activity type along the road network.
 - Select roads to close and export a what-if scenario file for TAREEK.
+- Save views (time, map position, layers, selected links and heatmap) and go
+  back to them later. Save a view at each hour, and export an image of each
+  view. Share the views with a file.
 - Export the map as PNG or PDF, the hourly chart as PNG or PDF, and a video
   as MP4.
 - Handles large runs (events files of 2 GB and more) with a disk cache.

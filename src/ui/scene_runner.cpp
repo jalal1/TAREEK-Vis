@@ -2,10 +2,13 @@
 #include "main_window.h"
 #include "core/logger.h"
 #include <QAction>
+#include <QElapsedTimer>
+#include <QPainter>
 #include <QApplication>
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
+#include <QLineEdit>
 #include <QTimer>
 #include <algorithm>
 #include <cstdio>
@@ -60,6 +63,7 @@ bool SceneRunner::prepare() {
     const QJsonObject root = doc.object();
     frames_ = root.value("frames").toInt(frames_);
     step_ = root.value("step_s").toDouble(step_);
+    scale_ = root.value("scale").toInt(scale_);
 
     for (const QJsonValue& v : root.value("scenes").toArray()) {
         if (v.toObject().value("run").toString() == runName_) scenes_.append(v);
@@ -77,7 +81,9 @@ bool SceneRunner::prepare() {
     window_->mapWidget()->setFixedSize(w, h);
 
     QDir().mkpath(outDir_);
-    window_->setCaptureMode(true);
+    // Still images (frames 0) time nothing, so the background workers
+    // (hourly volumes, heatmaps) can run and the panels show their data
+    window_->setCaptureMode(frames_ > 0);
     connect(window_, &MainWindow::runLoaded, this, [this]() {
         // Let the window paint once before the first scene
         QTimer::singleShot(500, this, &SceneRunner::runAll);
@@ -114,11 +120,44 @@ bool SceneRunner::applyActions(const QJsonObject& actions) {
     return ok;
 }
 
+void SceneRunner::wait(double seconds) {
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < seconds * 1000.0) {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+    }
+}
+
 void SceneRunner::runScene(const QJsonObject& scene) {
     const QString name = scene.value("name").toString();
     MapWidget* map = window_->mapWidget();
 
     applyActions(scene.value("actions").toObject());
+
+    // "counts": {"file": path, "scale": countsScaleFactor}
+    const QJsonObject counts = scene.value("counts").toObject();
+    if (!counts.isEmpty() &&
+        !window_->loadCounts(counts.value("file").toString(),
+                             counts.value("scale").toDouble(1.0))) {
+        fail("cannot load counts " + counts.value("file").toString());
+    }
+    // "select": MATSim link ids to add to the selected links (Ctrl+click)
+    for (const QJsonValue& v : scene.value("select").toArray()) {
+        if (!window_->selectLinkForCapture(v.toString())) fail("no link " + v.toString());
+    }
+    // "fill": {placeholder text: text}, typed into that box of the side panel
+    const QJsonObject fill = scene.value("fill").toObject();
+    for (auto it = fill.begin(); it != fill.end(); ++it) {
+        QLineEdit* box = nullptr;
+        for (QLineEdit* e : window_->sidePanel()->findChildren<QLineEdit*>()) {
+            if (e->placeholderText() == it.key()) { box = e; break; }
+        }
+        if (box) box->setText(it.value().toString());
+        else fail("no box with placeholder \"" + it.key() + "\"");
+    }
+    // "heatmap": an activity type
+    const QString heatmap = scene.value("heatmap").toString();
+    if (!heatmap.isEmpty()) window_->showHeatmapForCapture(heatmap);
 
     const float time = static_cast<float>(scene.value("time").toDouble());
     map->setSimulationTime(time);
@@ -136,7 +175,15 @@ void SceneRunner::runScene(const QJsonObject& scene) {
         if (id == kNoVehicle) fail("no vehicle " + track);
         else map->setTrackedVehicle(id);
     }
+    // "find": a link, person or vehicle id, as typed in the search box. It
+    // comes after the view, because a find moves the view to what it found.
+    const QString find = scene.value("find").toString();
+    if (!find.isEmpty()) window_->findForCapture(find);
     QApplication::processEvents();
+    // "wait_s": time for background work (heatmap, hourly volumes) to end
+    wait(scene.value("wait_s").toDouble(0.0));
+    // A heatmap on a large network takes minutes: wait until it is on the map
+    while (window_->heatmapRunning()) wait(1.0);
 
     // The tracked vehicle's state at the scene time, for the height check
     QJsonObject tracked;
@@ -148,8 +195,46 @@ void SceneRunner::runScene(const QJsonObject& scene) {
     }
 
     const QString imagePath = QDir(outDir_).absoluteFilePath(name + ".png");
-    const QImage image = map->renderToImage(1);
+    // "scale": the same off-screen render as Export > PNG at 2x, 4x or 8x
+    const QImage image = map->renderToImage(scene.value("scale").toInt(scale_));
     if (image.isNull() || !image.save(imagePath)) fail("cannot save " + imagePath);
+
+    // "panel": also save the side panel, at this many times its screen size
+    const int panelScale = scene.value("panel").toInt(0);
+    QWidget* panel = window_->sidePanel();
+    if (panelScale > 0 && panel && panel->isVisible()) {
+        QImage panelImage(panel->size() * panelScale, QImage::Format_ARGB32_Premultiplied);
+        panelImage.setDevicePixelRatio(panelScale);
+        panelImage.fill(panel->palette().window().color());
+        panel->render(&panelImage);
+        const QString panelPath = QDir(outDir_).absoluteFilePath(name + "-panel.png");
+        if (!panelImage.save(panelPath)) fail("cannot save " + panelPath);
+    }
+
+    // "count_chart": a link with a count station. Saves the chart window that
+    // a click on the station opens, at the "panel" scale (3 if not given).
+    const QString countLink = scene.value("count_chart").toString();
+    if (!countLink.isEmpty()) {
+        QWidget* chart = window_->showCountChartForCapture(countLink);
+        if (!chart) {
+            fail("no count station on link " + countLink);
+        } else {
+            wait(1.0);
+            const int s = panelScale > 0 ? panelScale : 3;
+            QImage chartImage(chart->size() * s, QImage::Format_ARGB32_Premultiplied);
+            chartImage.setDevicePixelRatio(s);
+            chartImage.fill(chart->palette().window().color());
+            chart->render(&chartImage);
+            const QString chartPath = QDir(outDir_).absoluteFilePath(name + "-counts.png");
+            if (!chartImage.save(chartPath)) fail("cannot save " + chartPath);
+            chart->close();
+        }
+    }
+
+    if (frames_ <= 0) {
+        LOG_INFO(QString("Scene %1 captured").arg(name));
+        return;
+    }
 
     const MapWidget::FrameTiming t = map->measureFrames(time, frames_, step_);
     std::vector<double> total(t.updateMs.size());

@@ -2859,24 +2859,6 @@ void MainWindow::onLoadCounts() {
 
     if (countsPath.isEmpty()) return;
 
-    LOG_INFO(QString("Loading counts file: %1").arg(countsPath));
-    statusLabel_->setText("Loading counts...");
-    QApplication::processEvents();
-
-    // Parse counts.xml
-    countsData_ = CountsParser::parse(
-        countsPath.toStdString(),
-        *networkIndex_);
-
-    if (!countsData_ || countsData_->counts.empty()) {
-        QMessageBox::warning(this, "Load Counts",
-            "No valid count locations found in the file.\n"
-            "Check that loc_id values match network link IDs.");
-        countsData_.reset();
-        statusLabel_->setText("Counts loading failed");
-        return;
-    }
-
     // Ask user for countsScaleFactor
     bool ok = false;
     double scaleFactor = QInputDialog::getDouble(
@@ -2895,9 +2877,33 @@ void MainWindow::onLoadCounts() {
         &ok
     );
     if (!ok) {
-        countsData_.reset();
         statusLabel_->setText("Counts loading cancelled");
         return;
+    }
+
+    if (!loadCounts(countsPath, scaleFactor)) {
+        QMessageBox::warning(this, "Load Counts",
+            "No valid count locations found in the file.\n"
+            "Check that loc_id values match network link IDs.");
+    }
+}
+
+bool MainWindow::loadCounts(const QString& countsPath, double scaleFactor) {
+    if (!networkIndex_ || !vehicleIndex_) return false;
+
+    LOG_INFO(QString("Loading counts file: %1").arg(countsPath));
+    statusLabel_->setText("Loading counts...");
+    QApplication::processEvents();
+
+    // Parse counts.xml
+    countsData_ = CountsParser::parse(
+        countsPath.toStdString(),
+        *networkIndex_);
+
+    if (!countsData_ || countsData_->counts.empty()) {
+        countsData_.reset();
+        statusLabel_->setText("Counts loading failed");
+        return false;
     }
 
     // Remember the sample rate the user just told us about. The link histogram
@@ -2936,6 +2942,33 @@ void MainWindow::onLoadCounts() {
     if (selectedLinkId_ != kNoLink) {
         onNetworkLinkClicked(selectedLinkId_);
     }
+    return true;
+}
+
+void MainWindow::findForCapture(const QString& id) {
+    searchEdit_->setText(id);
+    onFind();
+}
+
+bool MainWindow::selectLinkForCapture(const QString& linkId) {
+    if (!networkIndex_) return false;
+    const uint32_t id = networkIndex_->findLinkByOriginalId(linkId.toStdString());
+    if (id == UINT32_MAX) return false;
+    onNetworkLinkCtrlClicked(id);
+    return true;
+}
+
+QWidget* MainWindow::showCountChartForCapture(const QString& linkId) {
+    if (!networkIndex_ || !countsData_) return nullptr;
+    const uint32_t id = networkIndex_->findLinkByOriginalId(linkId.toStdString());
+    if (id == UINT32_MAX || !countsData_->linkToCount.count(id)) return nullptr;
+    onCountLinkClicked(id);
+    const auto dialogs = findChildren<CountsChartDialog*>();
+    return dialogs.isEmpty() ? nullptr : dialogs.last();
+}
+
+QWidget* MainWindow::sidePanel() const {
+    return sidePanel_;
 }
 
 void MainWindow::onShowCountsToggled(bool checked) {

@@ -75,6 +75,24 @@ public:
         return vehicleIndex_ ? vehicleIndex_->findVehicleByOriginalId(matsimId.toStdString())
                              : kNoVehicle;
     }
+    // Scene capture: the user commands, without the mouse and the dialogs
+    // Type an id in the search box and press Enter
+    void findForCapture(const QString& id);
+    // Ctrl+click the link with this MATSim id. False if there is no such link.
+    bool selectLinkForCapture(const QString& linkId);
+    // Analysis > Activity Heatmap > this type
+    // A long computation starts without the question
+    void showHeatmapForCapture(const QString& activityType) {
+        heatmapLongRunAccepted_ = true;
+        onHeatmapTypeSelected(activityType);
+    }
+    bool heatmapRunning() const { return heatmapRunning_; }
+    // Load a counts file and multiply the simulated volumes by scaleFactor
+    bool loadCounts(const QString& path, double scaleFactor);
+    // Click the count station on this link. Returns its chart window, or
+    // nullptr if the link has no station.
+    QWidget* showCountChartForCapture(const QString& linkId);
+    QWidget* sidePanel() const;
 
 signals:
     // A run is loaded and on the map (from the cache or after preprocessing)

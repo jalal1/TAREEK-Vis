@@ -35,9 +35,6 @@
         <file alias="circle-dot-16.png">png/circle-dot-16.png</file>
         <file alias="circle-dot-32.png">png/circle-dot-32.png</file>
         <file alias="circle-dot-64.png">png/circle-dot-64.png</file>
-        <file alias="columns-2-16.png">png/columns-2-16.png</file>
-        <file alias="columns-2-32.png">png/columns-2-32.png</file>
-        <file alias="columns-2-64.png">png/columns-2-64.png</file>
         <file alias="copy-16.png">png/copy-16.png</file>
         <file alias="copy-32.png">png/copy-32.png</file>
         <file alias="copy-64.png">png/copy-64.png</file>

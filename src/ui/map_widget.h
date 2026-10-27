@@ -141,6 +141,8 @@ public:
                     float lixelSize, const QString& title);
     void setHeatmapVisible(bool visible);
     bool heatmapVisible() const;
+    // The `title` of the map shown (its activity type), or empty
+    const QString& heatmapTitle() const { return heatmapTitle_; }
     void clearHeatmap();
 
     // Anchor the top of the color ramp at a shared value, so maps of different

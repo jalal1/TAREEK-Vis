@@ -4,6 +4,9 @@ The activity heatmap shows where the activities of one type are, for example
 home or work. It shows the density along the roads. TAREEK-Vis measures the
 distance along the road network, not in a straight line.
 
+The **Analysis** tab also exports the charts of all count stations. See
+[Compare with traffic counts](counts.md).
+
 ![Activity density heatmap](images/heatmap.png)
 
 ## Show a heatmap

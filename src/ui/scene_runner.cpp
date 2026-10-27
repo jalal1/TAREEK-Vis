@@ -65,8 +65,13 @@ bool SceneRunner::prepare() {
     step_ = root.value("step_s").toDouble(step_);
     scale_ = root.value("scale").toInt(scale_);
 
-    for (const QJsonValue& v : root.value("scenes").toArray()) {
-        if (v.toObject().value("run").toString() == runName_) scenes_.append(v);
+    // A views file (Views tab) has the same entries under "views". An entry
+    // with no "run" is for every run.
+    const QJsonArray entries = root.contains("scenes") ? root.value("scenes").toArray()
+                                                       : root.value("views").toArray();
+    for (const QJsonValue& v : entries) {
+        const QString run = v.toObject().value("run").toString();
+        if (run.isEmpty() || run == runName_) scenes_.append(v);
     }
     if (scenes_.isEmpty()) {
         fail("no scene for run " + runName_ + " in " + scenesFile_);
@@ -102,7 +107,10 @@ bool SceneRunner::applyActions(const QJsonObject& actions) {
     for (auto it = actions.begin(); it != actions.end(); ++it) {
         QAction* found = nullptr;
         for (QAction* a : all) {
-            if (a->text().remove('&') == it.key()) { found = a; break; }
+            if (a->text().remove('&') == it.key() || MainWindow::toggleKey(a) == it.key()) {
+                found = a;
+                break;
+            }
         }
         if (!found) {
             fail("no action named \"" + it.key() + "\"");

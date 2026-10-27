@@ -5,6 +5,12 @@
         <file alias="book-open-16.png">png/book-open-16.png</file>
         <file alias="book-open-32.png">png/book-open-32.png</file>
         <file alias="book-open-64.png">png/book-open-64.png</file>
+        <file alias="bookmark-16.png">png/bookmark-16.png</file>
+        <file alias="bookmark-32.png">png/bookmark-32.png</file>
+        <file alias="bookmark-64.png">png/bookmark-64.png</file>
+        <file alias="bookmark-plus-16.png">png/bookmark-plus-16.png</file>
+        <file alias="bookmark-plus-32.png">png/bookmark-plus-32.png</file>
+        <file alias="bookmark-plus-64.png">png/bookmark-plus-64.png</file>
         <file alias="bug-16.png">png/bug-16.png</file>
         <file alias="bug-32.png">png/bug-32.png</file>
         <file alias="bug-64.png">png/bug-64.png</file>
@@ -38,6 +44,9 @@
         <file alias="eye-16.png">png/eye-16.png</file>
         <file alias="eye-32.png">png/eye-32.png</file>
         <file alias="eye-64.png">png/eye-64.png</file>
+        <file alias="file-input-16.png">png/file-input-16.png</file>
+        <file alias="file-input-32.png">png/file-input-32.png</file>
+        <file alias="file-input-64.png">png/file-input-64.png</file>
         <file alias="file-output-16.png">png/file-output-16.png</file>
         <file alias="file-output-32.png">png/file-output-32.png</file>
         <file alias="file-output-64.png">png/file-output-64.png</file>
@@ -68,6 +77,9 @@
         <file alias="image-16.png">png/image-16.png</file>
         <file alias="image-32.png">png/image-32.png</file>
         <file alias="image-64.png">png/image-64.png</file>
+        <file alias="images-16.png">png/images-16.png</file>
+        <file alias="images-32.png">png/images-32.png</file>
+        <file alias="images-64.png">png/images-64.png</file>
         <file alias="info-16.png">png/info-16.png</file>
         <file alias="info-32.png">png/info-32.png</file>
         <file alias="info-64.png">png/info-64.png</file>
@@ -134,6 +146,9 @@
         <file alias="square-16.png">png/square-16.png</file>
         <file alias="square-32.png">png/square-32.png</file>
         <file alias="square-64.png">png/square-64.png</file>
+        <file alias="timer-16.png">png/timer-16.png</file>
+        <file alias="timer-32.png">png/timer-32.png</file>
+        <file alias="timer-64.png">png/timer-64.png</file>
         <file alias="train-front-16.png">png/train-front-16.png</file>
         <file alias="train-front-32.png">png/train-front-32.png</file>
         <file alias="train-front-64.png">png/train-front-64.png</file>

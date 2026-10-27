@@ -27,6 +27,7 @@ open.
 - [Air traffic](air-traffic.md)
 - [Activity heatmap](heatmap.md)
 - [What-if scenarios](scenarios.md)
+- [Saved views](views.md)
 
 ## Share results
 

@@ -6,6 +6,7 @@
 #include <QMenu>
 #include <QDir>
 #include <QTimer>
+#include <QJsonObject>
 #include <memory>
 
 #include "map_widget.h"
@@ -34,6 +35,7 @@ namespace simvis {
 class RibbonBar;
 class HelpWindow;
 class SidePanel;
+class ViewsPanel;
 class LoadingIndicator;
 
 // Hourly traffic for every link: 24 counts per link, laid end to end and
@@ -93,6 +95,14 @@ public:
     // nullptr if the link has no station.
     QWidget* showCountChartForCapture(const QString& linkId);
     QWidget* sidePanel() const;
+
+    // Saved views (Views tab, views_panel.h): the state of the map as one
+    // view of a views file, and back
+    QJsonObject currentView(const QString& name) const;
+    void applyView(const QJsonObject& view);
+    // The key of a toggle in a view: its text without '&' and without a
+    // count at the end, so "Air taxi (1660)" is the same toggle in each run
+    static QString toggleKey(const QAction* action);
 
 signals:
     // A run is loaded and on the map (from the cache or after preprocessing)
@@ -373,10 +383,19 @@ private:
     // Side panel page actions (see updateSidePanelActions)
     QAction* showInfoPanelAction_;
     QAction* showSelectedLinksAction_ = nullptr;
+    QAction* showViewsAction_ = nullptr;
+
+    // Views tab
+    QAction* saveViewAction_ = nullptr;
+    QAction* saveOverTimeAction_ = nullptr;
+    QAction* captureViewsAction_ = nullptr;
+    QAction* importViewsAction_ = nullptr;
+    QAction* exportViewsAction_ = nullptr;
 
     // Counts actions
     QAction* loadCountsAction_;
     QAction* showCountsAction_;
+    QAction* exportCountChartsAction_ = nullptr;
 
     // Recent folders menu (rebuilt from QSettings on every change)
     QMenu* recentFoldersMenu_ = nullptr;
@@ -471,6 +490,18 @@ private:
     QString linkOriginalId(uint32_t linkId) const;
     // A row for the "Selected links" panel.
     ScenarioPanel::LinkRow scenarioRow(uint32_t linkId) const;
+    // The toggles a view keeps: the checkable actions of the window and of
+    // its menus, without the panel pages, Pan mode and the playback speeds
+    QList<QAction*> viewToggles() const;
+    // Add the current view to the Views page and show that page
+    void saveView();
+    // Views > Save Over Time: the current view at a list of times
+    void saveViewsOverTime();
+    // Views > Capture Views: a PNG image of each chosen view
+    void captureViews();
+    // Analysis > Export Count Charts: a PNG chart of each count station and
+    // a summary table
+    void exportCountCharts();
     void zoomToLink(uint32_t linkId);
 
     // The panel at the right of the map. Its pages are the info panel and the
@@ -484,7 +515,9 @@ private:
     std::string carriedLinkId_;
     int infoPage_ = 0;
     int selectedLinksPage_ = 0;
+    int viewsPage_ = 0;
     ScenarioPanel* scenarioPanel_ = nullptr;
+    ViewsPanel* viewsPanel_ = nullptr;
     QLineEdit* searchEdit_ = nullptr;
 
     // TAREEK experiment folder name of the loaded run: the folder that holds

@@ -18,10 +18,12 @@
 | Ctrl++ / Ctrl+- | Zoom in / zoom out |
 | Ctrl+Shift+P | Export the map as PNG |
 | Ctrl+P | Export the map as PDF |
+| Ctrl+B | Save the current view |
 | Ctrl+R | Record a video |
 | Ctrl+Shift+R | Stop the recording |
 | Ctrl+F1 | Collapse or expand the ribbon |
-| Delete | Remove the selected rows from the Selected Links page |
+| Delete | Remove the selected rows from the Selected Links page, or the selected views from the Views page |
+| F2 | Rename the selected view |
 
 ## Mouse
 
@@ -33,5 +35,7 @@
 | Click an empty area | Stop following a vehicle and remove the halo |
 | Ctrl+click a road | Add the road to the scenario, or remove it |
 | Double-click a row on the Selected Links page | Zoom to that link |
+| Double-click a view on the Views page | Go to that view |
+| Right-click a view on the Views page | Rename, update, duplicate or delete the view |
 | Right-click the hourly volume chart | Export the chart |
 | Double-click a ribbon tab | Collapse or expand the ribbon |

@@ -12,10 +12,18 @@
 - If the map shows a background map, give the credit that the provider
   requires. See [Move around the map](navigate-the-map.md).
 
+## Save images of many views
+
+To save an image of each saved view in one step, or to save the map every
+hour of the day, see [Saved views](views.md).
+
 ## Save a chart
 
 To save the hourly volume chart of a link, see
 [Road links and hourly volume](road-links.md).
+
+To save the chart of each count station in one step, see
+[Compare with traffic counts](counts.md).
 
 ## Record a video
 

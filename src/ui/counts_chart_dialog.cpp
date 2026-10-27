@@ -1,5 +1,19 @@
 #include "counts_chart_dialog.h"
+#include "ribbon/ribbon.h"
+#include <QCheckBox>
+#include <QComboBox>
+#include <QDialogButtonBox>
+#include <QDir>
+#include <QFileDialog>
+#include <QFormLayout>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QLineEdit>
 #include <QPainter>
+#include <QPushButton>
+#include <QRadioButton>
+#include <QSettings>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
@@ -168,6 +182,157 @@ CountsChartDialog::CountsChartDialog(const CountData& data,
 
     auto* chart = new CountsChartWidget(data, this);
     layout->addWidget(chart);
+}
+
+// ============================================================================
+// Export of all charts
+// ============================================================================
+
+namespace {
+
+// The chart as in the dialog, and the strip with the title above it
+constexpr QSize kChartSize(640, 400);
+constexpr int kTitleHeight = 34;
+
+} // anonymous namespace
+
+QImage countChartImage(const CountData& data, const QString& title, int scale) {
+    const QSize size(kChartSize.width(), kChartSize.height() + kTitleHeight);
+    QImage image(size * scale, QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(scale);
+    image.fill(QColor(32, 32, 32));
+    {
+        QPainter p(&image);
+        p.setRenderHint(QPainter::TextAntialiasing);
+        p.setPen(QColor(230, 230, 230));
+        p.setFont(QFont("Arial", 10, QFont::Bold));
+        p.drawText(QRect(16, 0, size.width() - 32, kTitleHeight),
+                   Qt::AlignLeft | Qt::AlignVCenter, title);
+    }
+    // The widget is never shown: it only paints into the image
+    CountsChartWidget chart(data);
+    chart.resize(kChartSize);
+    chart.render(&image, QPoint(0, kTitleHeight));
+    return image;
+}
+
+ExportCountChartsDialog::ExportCountChartsDialog(int stations, int selected,
+                                                 const QString& folder, QWidget* parent)
+    : QDialog(parent), stations_(stations), selected_(selected)
+{
+    setWindowTitle("Export Count Charts");
+    auto* layout = new QVBoxLayout(this);
+
+    auto* intro = new QLabel("Save the chart of each count station as a PNG image, "
+                             "and a table of the stations.", this);
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+
+    allButton_ = new QRadioButton(QString("All stations (%1)").arg(stations), this);
+    selectedButton_ = new QRadioButton(
+        QString("Stations on the selected links (%1)").arg(selected), this);
+    selectedButton_->setEnabled(selected > 0);
+    if (selected == 0) selectedButton_->setToolTip("Ctrl+click roads with a count station first");
+    (selected > 0 ? selectedButton_ : allButton_)->setChecked(true);
+    layout->addWidget(allButton_);
+    layout->addWidget(selectedButton_);
+    connect(allButton_, &QRadioButton::toggled, this, &ExportCountChartsDialog::updateState);
+
+    QSettings settings;
+    auto* form = new QFormLayout();
+
+    // The choices of Export > PNG
+    scaleCombo_ = new QComboBox(this);
+    scaleCombo_->addItem("1x (screen resolution)", 1);
+    scaleCombo_->addItem("2x (recommended)", 2);
+    scaleCombo_->addItem("4x (high quality)", 4);
+    scaleCombo_->addItem(QString::fromUtf8("8x (very high — large file)"), 8);
+    const int lastScale = scaleCombo_->findData(settings.value("counts/exportScale", 2).toInt());
+    scaleCombo_->setCurrentIndex(lastScale >= 0 ? lastScale : 1);
+    connect(scaleCombo_, &QComboBox::currentIndexChanged,
+            this, &ExportCountChartsDialog::updateState);
+    form->addRow("Resolution:", scaleCombo_);
+
+    sizeLabel_ = new QLabel(this);
+    sizeLabel_->setStyleSheet("color: gray;");
+    form->addRow(QString(), sizeLabel_);
+
+    auto* folderRow = new QHBoxLayout();
+    folderEdit_ = new QLineEdit(QDir::toNativeSeparators(folder), this);
+    connect(folderEdit_, &QLineEdit::textChanged, this, &ExportCountChartsDialog::updateState);
+    folderRow->addWidget(folderEdit_, 1);
+    auto* browse = new QToolButton(this);
+    browse->setIcon(ribbonIcon("folder-open"));
+    browse->setToolTip("Select the folder");
+    connect(browse, &QToolButton::clicked, this, [this]() {
+        const QString dir = QFileDialog::getExistingDirectory(this, "Folder for the charts",
+                                                              folderEdit_->text());
+        if (!dir.isEmpty()) folderEdit_->setText(QDir::toNativeSeparators(dir));
+    });
+    folderRow->addWidget(browse);
+    form->addRow("Folder:", folderRow);
+    layout->addLayout(form);
+
+    summaryBox_ = new QCheckBox("Also save summary.csv (totals, ratio and GEH of each station)",
+                                this);
+    summaryBox_->setChecked(settings.value("counts/writeSummary", true).toBool());
+    layout->addWidget(summaryBox_);
+
+    openFolderBox_ = new QCheckBox("Open the folder when done", this);
+    openFolderBox_->setChecked(settings.value("views/openFolder", true).toBool());
+    layout->addWidget(openFolderBox_);
+
+    auto* note = new QLabel("Files with the same name are replaced.", this);
+    note->setStyleSheet("color: gray;");
+    layout->addWidget(note);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
+    exportButton_ = buttons->addButton("Export", QDialogButtonBox::AcceptRole);
+    exportButton_->setIcon(ribbonIcon("chart-column"));
+    exportButton_->setDefault(true);
+    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    resize(440, sizeHint().height());
+    updateState();
+}
+
+bool ExportCountChartsDialog::selectedOnly() const {
+    return selectedButton_->isChecked();
+}
+
+int ExportCountChartsDialog::scale() const {
+    return scaleCombo_->currentData().toInt();
+}
+
+QString ExportCountChartsDialog::folder() const {
+    return QDir::fromNativeSeparators(folderEdit_->text().trimmed());
+}
+
+bool ExportCountChartsDialog::writeSummary() const {
+    return summaryBox_->isChecked();
+}
+
+bool ExportCountChartsDialog::openFolderWhenDone() const {
+    return openFolderBox_->isChecked();
+}
+
+void ExportCountChartsDialog::accept() {
+    QSettings settings;
+    settings.setValue("counts/exportScale", scale());
+    settings.setValue("counts/writeSummary", writeSummary());
+    settings.setValue("views/openFolder", openFolderWhenDone());
+    QDialog::accept();
+}
+
+void ExportCountChartsDialog::updateState() {
+    const int count = selectedOnly() ? selected_ : stations_;
+    sizeLabel_->setText(QString("%1 chart%2 of %3 x %4 pixels")
+        .arg(count).arg(count == 1 ? "" : "s")
+        .arg(kChartSize.width() * scale())
+        .arg((kChartSize.height() + kTitleHeight) * scale()));
+    exportButton_->setEnabled(count > 0 && !folder().isEmpty());
 }
 
 } // namespace simvis

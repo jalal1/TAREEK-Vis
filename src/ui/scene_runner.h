@@ -16,9 +16,11 @@ class MainWindow;
 // mouse or the keyboard, so the images and the times can be made again
 // exactly. See docs/air-and-modes-plan.md, stage VIS-0.
 //
-// Root keys: "frames" (frames to time per scene; 0 = still images only, and
-// the background workers then run), "step_s", "scale" (image render scale).
-// Scene keys: "name", "run", "time", "center", "m_per_px", "actions",
+// Root keys: "scenes" (or "views", in a file of the Views tab), "frames"
+// (frames to time per scene; 0 = still images only, and the background
+// workers then run), "step_s", "scale" (image render scale).
+// Scene keys: "name", "run" (no run = every run), "time", "center",
+// "m_per_px", "actions",
 // "track", "find", "counts" {"file", "scale"}, "select" (link ids),
 // "fill" {placeholder: text}, "heatmap" (activity type), "wait_s",
 // "scale", "panel" (side panel image scale), "count_chart" (link id).

@@ -6,6 +6,7 @@
 #include <QDialog>
 #include <QFile>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
@@ -38,11 +39,59 @@ const QString kRoot = QStringLiteral(":/help/");
 constexpr int kPageMargin = 16;
 
 constexpr int kFileRole = Qt::UserRole;
+constexpr int kHeadingRole = Qt::UserRole + 1;
 
 QString readPage(const QString& file) {
     QFile f(kRoot + file);
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return QString();
     return QString::fromUtf8(f.readAll());
+}
+
+// The words of Markdown text as the page shows them, in lower case: without
+// the targets of links, so that a link to counts.md is not a match for
+// "counts"
+QString searchText(const QString& markdown) {
+    static const QRegularExpression linkTarget(QStringLiteral("\\]\\([^)]*\\)"));
+    QString text = markdown.toLower();
+    text.replace(linkTarget, QStringLiteral("]"));
+    return text;
+}
+
+// The "##" and "###" parts of a page: the heading and the search text. The
+// text before the first heading is in no part.
+QList<QPair<QString, QString>> sectionsOf(const QString& markdown) {
+    QList<QPair<QString, QString>> sections;
+    QString body;
+    bool inCode = false;
+    auto close = [&]() {
+        if (!sections.isEmpty()) sections.last().second = searchText(body);
+        body.clear();
+    };
+    for (const QString& line : markdown.split(QLatin1Char('\n'))) {
+        if (line.startsWith(QLatin1String("```"))) inCode = !inCode;
+        if (!inCode && (line.startsWith(QLatin1String("## ")) ||
+                        line.startsWith(QLatin1String("### ")))) {
+            close();
+            QString heading = line.mid(line.indexOf(QLatin1Char(' ')) + 1).trimmed();
+            heading.remove(QLatin1Char('*'));
+            heading.remove(QLatin1Char('`'));
+            sections.append({heading, QString()});
+        }
+        body += line + QLatin1Char('\n');
+    }
+    close();
+    return sections;
+}
+
+int countOf(const QString& text, const QStringList& words) {
+    int count = 0;
+    for (const QString& word : words) count += text.count(word);
+    return count;
+}
+
+bool hasAll(const QString& text, const QStringList& words) {
+    return std::all_of(words.begin(), words.end(),
+                       [&text](const QString& word) { return text.contains(word); });
 }
 
 QString fileOf(const QUrl& url) {
@@ -154,12 +203,15 @@ HelpWindow::HelpWindow(QWidget* parent)
     connect(tree_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem* item) {
         const QString file = item->data(0, kFileRole).toString();
         if (file.isEmpty()) return;
+        const QString heading = item->data(0, kHeadingRole).toString();
+        if (!heading.isEmpty()) {
+            showSection(file, heading);
+            return;
+        }
         showPage(file);
         // From a search, go to the first place that has the first word
-        const QString words = searchEdit_->text().trimmed();
-        if (!words.isEmpty()) {
-            browser_->find(words.split(QLatin1Char(' '), Qt::SkipEmptyParts).first());
-        }
+        browser_->moveCursor(QTextCursor::Start);
+        findSearchWord();
     });
     connect(searchEdit_, &QLineEdit::textChanged, this, &HelpWindow::search);
 
@@ -234,7 +286,7 @@ void HelpWindow::loadContents() {
     // index.md: "## Section" starts a section, "- [Title](page.md)" is a page
     static const QRegularExpression item(QStringLiteral("^- \\[(.+)\\]\\((.+\\.md)\\)"));
 
-    pages_.append({"index.md", "Contents", readPage("index.md").toLower()});
+    pages_.append({"index.md", "Contents", searchText(readPage("index.md")), {}});
 
     const QStringList lines = readPage("index.md").split(QLatin1Char('\n'));
     for (const QString& line : lines) {
@@ -246,12 +298,19 @@ void HelpWindow::loadContents() {
         if (!match.hasMatch() || sections_.isEmpty()) continue;
         const QString file = match.captured(2);
         sections_.last().second.append(pages_.size());
-        pages_.append({file, match.captured(1), readPage(file).toLower()});
+        const QString markdown = readPage(file);
+        Page page{file, match.captured(1), searchText(markdown), {}};
+        for (const auto& [heading, text] : sectionsOf(markdown)) {
+            page.sections.append({heading, text});
+        }
+        pages_.append(page);
     }
 }
 
 void HelpWindow::showContents() {
     tree_->clear();
+    tree_->setColumnCount(1);  // the search shows the matches in a second column
+    tree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     tree_->setRootIsDecorated(false);
 
     auto* home = new QTreeWidgetItem(tree_, {pages_.first().title});
@@ -279,25 +338,79 @@ void HelpWindow::search(const QString& text) {
         return;
     }
 
-    // A page matches when it has all of the words
+    // A page matches when it has all of the words. A page with the words in
+    // its title comes first, then the page with the most matches.
+    struct Hit {
+        int page;
+        int count;
+        bool inTitle;
+    };
+    std::vector<Hit> hits;
+    for (int i = 0; i < pages_.size(); ++i) {
+        const Page& page = pages_[i];
+        if (!hasAll(page.text, words)) continue;
+        hits.push_back({i, countOf(page.text, words), hasAll(page.title.toLower(), words)});
+    }
+    std::stable_sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) {
+        if (a.inTitle != b.inTitle) return a.inTitle;
+        return a.count > b.count;
+    });
+
     tree_->clear();
-    for (const Page& page : pages_) {
-        bool all = true;
-        for (const QString& word : words) {
-            if (!page.text.contains(word)) {
-                all = false;
-                break;
-            }
-        }
-        if (!all) continue;
-        auto* item = new QTreeWidgetItem(tree_, {page.title});
+    tree_->setColumnCount(2);
+    tree_->header()->setStretchLastSection(false);
+    tree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    tree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+
+    auto* summary = new QTreeWidgetItem(tree_, {hits.empty()
+        ? QString("No pages found for \"%1\"").arg(text.trimmed())
+        : QString("%1 page%2 for \"%3\"").arg(hits.size()).arg(hits.size() == 1 ? "" : "s")
+              .arg(text.trimmed())});
+    summary->setFlags(Qt::NoItemFlags);
+    QFont italic = summary->font(0);
+    italic.setItalic(true);
+    summary->setFont(0, italic);
+
+    for (const Hit& hit : hits) {
+        const Page& page = pages_[hit.page];
+        auto* item = new QTreeWidgetItem(tree_, {page.title, QString::number(hit.count)});
         item->setData(0, kFileRole, page.file);
+        QFont bold = item->font(0);
+        bold.setBold(true);
+        item->setFont(0, bold);
+        item->setForeground(1, QColor(Qt::gray));
+        item->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
+        item->setToolTip(0, QString("%1 match%2 on this page")
+            .arg(hit.count).arg(hit.count == 1 ? "" : "es"));
+        for (const Section& section : page.sections) {
+            if (!hasAll(section.text, words)) continue;
+            auto* child = new QTreeWidgetItem(item, {section.heading});
+            child->setData(0, kFileRole, page.file);
+            child->setData(0, kHeadingRole, section.heading);
+        }
     }
-    if (tree_->topLevelItemCount() == 0) {
-        auto* none = new QTreeWidgetItem(tree_, {"No pages found"});
-        none->setFlags(Qt::NoItemFlags);
-    }
+    tree_->expandAll();
     selectCurrentPage();
+}
+
+void HelpWindow::showSection(const QString& file, const QString& heading) {
+    showPage(file);
+    QTextDocument* doc = browser_->document();
+    for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
+        if (block.blockFormat().headingLevel() == 0 || block.text().trimmed() != heading)
+            continue;
+        browser_->setTextCursor(QTextCursor(block));
+        // The heading at the top, and the first match below it selected
+        browser_->verticalScrollBar()->setValue(
+            static_cast<int>(doc->documentLayout()->blockBoundingRect(block).top()));
+        findSearchWord();
+        return;
+    }
+}
+
+void HelpWindow::findSearchWord() {
+    const QStringList words = searchEdit_->text().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (!words.isEmpty()) browser_->find(words.first());
 }
 
 void HelpWindow::selectCurrentPage() {

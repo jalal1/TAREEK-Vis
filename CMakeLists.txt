@@ -50,6 +50,8 @@ set(SOURCES
     src/ui/counts_chart_dialog.cpp
     src/ui/screenshot_exporter.cpp
     src/ui/scenario_panel.cpp
+    src/ui/views_panel.cpp
+    src/ui/views_dialogs.cpp
     src/ui/side_panel.cpp
     src/ui/loading_indicator.cpp
     src/ui/help_window.cpp
@@ -100,6 +102,8 @@ set(HEADERS
     src/ui/counts_chart_dialog.h
     src/ui/screenshot_exporter.h
     src/ui/scenario_panel.h
+    src/ui/views_panel.h
+    src/ui/views_dialogs.h
     src/ui/side_panel.h
     src/ui/loading_indicator.h
     src/ui/search_box.h

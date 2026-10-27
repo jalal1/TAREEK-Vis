@@ -8,6 +8,8 @@
 #include "video_settings_dialog.h"
 #include "counts_chart_dialog.h"
 #include "help_window.h"
+#include "views_panel.h"
+#include "views_dialogs.h"
 #include "core/config.h"
 #include "core/logger.h"
 #include "analysis/nkde_scatter.h"
@@ -43,6 +45,12 @@
 #include <QLineEdit>
 #include <QToolTip>
 #include <QPointer>
+#include <QBuffer>
+#include <QEventLoop>
+#include <QLocale>
+#include <QSaveFile>
+#include <QJsonArray>
+#include <QRegularExpression>
 #include <algorithm>
 #include <functional>
 #include <cmath>
@@ -105,13 +113,15 @@ void MainWindow::setupUi() {
     loadingIndicator_ = new LoadingIndicator(mapWidget_);
 
     // One panel at the right (initially hidden) for everything that is shown
-    // beside the map: the details of what was clicked, and the links selected
-    // for a what-if scenario
+    // beside the map: the details of what was clicked, the links selected
+    // for a what-if scenario, and the saved views
     sidePanel_ = new SidePanel(splitter);
     infoPanel_ = new InfoPanel();
     infoPage_ = sidePanel_->addPage(infoPanel_, "Info");
     scenarioPanel_ = new ScenarioPanel();
     selectedLinksPage_ = sidePanel_->addPage(scenarioPanel_, "Selected Links", true);
+    viewsPanel_ = new ViewsPanel();
+    viewsPage_ = sidePanel_->addPage(viewsPanel_, "Views");
     sidePanel_->hide();
     splitter->addWidget(sidePanel_);
 
@@ -129,6 +139,17 @@ void MainWindow::setupUi() {
     setCentralWidget(centralWidget);
 
     connect(sidePanel_, &SidePanel::closeRequested, this, &MainWindow::hideSidePanel);
+
+    connect(viewsPanel_, &ViewsPanel::viewActivated, this, &MainWindow::applyView);
+    connect(viewsPanel_, &ViewsPanel::saveRequested, this, &MainWindow::saveView);
+    connect(viewsPanel_, &ViewsPanel::updateRequested, this, [this](int row) {
+        viewsPanel_->replaceView(row, currentView(QString()));
+        statusLabel_->setText(QString("Updated \"%1\" from the current view")
+            .arg(viewsPanel_->view(row).value("name").toString()));
+    });
+    connect(viewsPanel_, &ViewsPanel::message, this, [this](const QString& text) {
+        statusBar()->showMessage(text, 8000);
+    });
 
     connect(mapWidget_, &MapWidget::networkLinkCtrlClicked,
             this, &MainWindow::onNetworkLinkCtrlClicked);
@@ -501,6 +522,13 @@ void MainWindow::setupActions() {
         else hideSidePanel();
     });
 
+    showViewsAction_ = new QAction("Show &Views Panel", this);
+    showViewsAction_->setCheckable(true);
+    connect(showViewsAction_, &QAction::triggered, this, [this](bool checked) {
+        if (checked) sidePanel_->showPage(viewsPage_);
+        else hideSidePanel();
+    });
+
     connect(sidePanel_, &SidePanel::stateChanged, this, &MainWindow::updateSidePanelActions);
 
     // --- Background Map section ---
@@ -851,6 +879,17 @@ void MainWindow::setupRibbon() {
     auto* heatmap = analysis->addGroup("Heatmap");
     heatmap->addLargeAction(heatmapMenu_->menuAction());
 
+    exportCountChartsAction_ = new QAction("Export Count Charts...", this);
+    exportCountChartsAction_->setIcon(ribbonIcon("chart-column"));
+    exportCountChartsAction_->setIconText("Export Count\nCharts");
+    exportCountChartsAction_->setToolTip("Save the chart of each count station, and a "
+                                         "table of the totals, the ratio and the GEH");
+    exportCountChartsAction_->setEnabled(false);  // Enabled after counts loaded
+    connect(exportCountChartsAction_, &QAction::triggered, this, &MainWindow::exportCountCharts);
+
+    auto* countsGroup = analysis->addGroup("Counts");
+    countsGroup->addLargeAction(exportCountChartsAction_);
+
     // --- Scenario tab ---
     showSelectedLinksAction_->setIcon(ribbonIcon("list-checks"));
     showSelectedLinksAction_->setIconText("Selected\nLinks");
@@ -883,6 +922,92 @@ void MainWindow::setupRibbon() {
 
     auto* scenarioExport = scenario->addGroup("Export");
     scenarioExport->addLargeAction(exportScenarioAction_);
+
+    // --- Views tab ---
+    saveViewAction_ = new QAction("Save &View", this);
+    saveViewAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_B));
+    saveViewAction_->setIcon(ribbonIcon("bookmark-plus"));
+    saveViewAction_->setIconText("Save\nView");
+    saveViewAction_->setToolTip("Save the time, the map position, the layers, "
+                                "the selected links and the heatmap as a view (Ctrl+B)");
+    saveViewAction_->setEnabled(false);  // Enabled after network+events loaded
+    connect(saveViewAction_, &QAction::triggered, this, &MainWindow::saveView);
+
+    saveOverTimeAction_ = new QAction("Save Over Time...", this);
+    saveOverTimeAction_->setIcon(ribbonIcon("timer"));
+    saveOverTimeAction_->setToolTip("Save a view of the current map position at each "
+                                    "time, for example every hour from 06:00 to 20:00");
+    saveOverTimeAction_->setEnabled(false);
+    connect(saveOverTimeAction_, &QAction::triggered, this, &MainWindow::saveViewsOverTime);
+
+    captureViewsAction_ = new QAction("Capture Views...", this);
+    captureViewsAction_->setIcon(ribbonIcon("images"));
+    captureViewsAction_->setIconText("Capture\nViews");
+    captureViewsAction_->setToolTip("Save a PNG image of each view");
+    captureViewsAction_->setEnabled(false);
+    connect(captureViewsAction_, &QAction::triggered, this, &MainWindow::captureViews);
+
+    showViewsAction_->setIcon(ribbonIcon("bookmark"));
+    showViewsAction_->setIconText("Views\nPanel");
+
+    importViewsAction_ = new QAction("Import Views...", this);
+    importViewsAction_->setIcon(ribbonIcon("file-input"));
+    importViewsAction_->setToolTip("Add the views of a views file to this run");
+    importViewsAction_->setEnabled(false);
+    connect(importViewsAction_, &QAction::triggered, this, [this]() {
+        const QString path = QFileDialog::getOpenFileName(
+            this, "Import Views", QFileInfo(networkFilePath_).absolutePath(),
+            "Views Files (*.json);;All Files (*)");
+        if (path.isEmpty()) return;
+        const int before = viewsPanel_->count();
+        QString error;
+        if (!viewsPanel_->importFrom(path, &error)) {
+            QMessageBox::warning(this, "Import Views",
+                QString("Cannot import the views.\n%1").arg(error));
+            return;
+        }
+        sidePanel_->showPage(viewsPage_);
+        statusLabel_->setText(QString("Imported %1 view(s)").arg(viewsPanel_->count() - before));
+    });
+
+    exportViewsAction_ = new QAction("Export Views...", this);
+    exportViewsAction_->setIcon(ribbonIcon("file-output"));
+    exportViewsAction_->setToolTip("Save the views of this run to a file, to send to someone");
+    exportViewsAction_->setEnabled(false);
+    connect(exportViewsAction_, &QAction::triggered, this, [this]() {
+        const QString suggested = QDir(QFileInfo(networkFilePath_).absolutePath())
+            .absoluteFilePath(experimentName_.isEmpty() ? QString("views.json")
+                                                        : experimentName_ + "-views.json");
+        const QString path = QFileDialog::getSaveFileName(
+            this, "Export Views", suggested, "Views Files (*.json)");
+        if (path.isEmpty()) return;
+        QString error;
+        if (!viewsPanel_->exportTo(path, &error)) {
+            QMessageBox::warning(this, "Export Views",
+                QString("Cannot save the views.\n%1").arg(error));
+            return;
+        }
+        statusLabel_->setText(QString("Exported %1 view(s) to %2")
+            .arg(viewsPanel_->count()).arg(QDir::toNativeSeparators(path)));
+    });
+    connect(viewsPanel_, &ViewsPanel::countChanged, this, [this](int count) {
+        exportViewsAction_->setEnabled(count > 0);
+        captureViewsAction_->setEnabled(count > 0);
+    });
+
+    auto* viewsTab = ribbon_->addTab("Views");
+
+    auto* viewsGroup = viewsTab->addGroup("Views");
+    viewsGroup->addLargeAction(saveViewAction_);
+    viewsGroup->addSmallAction(saveOverTimeAction_);
+    viewsGroup->addLargeAction(showViewsAction_);
+
+    auto* capture = viewsTab->addGroup("Capture");
+    capture->addLargeAction(captureViewsAction_);
+
+    auto* share = viewsTab->addGroup("Share");
+    share->addSmallAction(importViewsAction_);
+    share->addSmallAction(exportViewsAction_);
 
     // --- Export tab ---
     exportPngAction_->setIcon(ribbonIcon("image"));
@@ -944,6 +1069,7 @@ void MainWindow::setupRibbon() {
             {"Air", "air-traffic.md"},
             {"Analysis", "heatmap.md"},
             {"Scenario", "scenarios.md"},
+            {"Views", "views.md"},
             {"Export", "export.md"},
         };
         if (!helpWindow_) helpWindow_ = new HelpWindow(this);
@@ -1261,6 +1387,12 @@ void MainWindow::resetScenarioState() {
         infoPanel_->clear();
     }
 
+    // The views belong to the old run
+    viewsPanel_->setRunFolder(QString());
+    saveViewAction_->setEnabled(false);
+    saveOverTimeAction_->setEnabled(false);
+    importViewsAction_->setEnabled(false);
+
     // Playback starts again, paused, at the new scenario's start time.
     timelineWidget_->setPlaying(false);
 
@@ -1270,6 +1402,7 @@ void MainWindow::resetScenarioState() {
     mapWidget_->setCountsData(nullptr);
     showCountsAction_->setChecked(false);
     showCountsAction_->setEnabled(false);
+    exportCountChartsAction_->setEnabled(false);
     transitData_.reset();
     mapWidget_->setTransitData(nullptr);
     networkCrs_ = CRSInfo();
@@ -1287,6 +1420,7 @@ void MainWindow::updateSidePanelActions() {
     const int page = sidePanel_->currentPage();
     showInfoPanelAction_->setChecked(shown && page == infoPage_);
     showSelectedLinksAction_->setChecked(shown && page == selectedLinksPage_);
+    showViewsAction_->setChecked(shown && page == viewsPage_);
 }
 
 void MainWindow::checkBackgroundMapCrs() {
@@ -1608,6 +1742,12 @@ void MainWindow::applyLoadedFiles(LoadedFiles& files, bool fromCache, const QStr
     // Enable counts loading now that network+events are available
     loadCountsAction_->setEnabled(true);
     rebuildCacheAction_->setEnabled(true);
+
+    // The saved views of this run, from the file beside the network file
+    viewsPanel_->setRunFolder(QFileInfo(networkFilePath_).absolutePath());
+    saveViewAction_->setEnabled(true);
+    saveOverTimeAction_->setEnabled(true);
+    importViewsAction_->setEnabled(true);
 
     // Offer a heatmap for each activity type this scenario contains. Anything
     // cached before the events index was written describes older data, so that
@@ -2902,6 +3042,7 @@ bool MainWindow::loadCounts(const QString& countsPath, double scaleFactor) {
 
     if (!countsData_ || countsData_->counts.empty()) {
         countsData_.reset();
+        exportCountChartsAction_->setEnabled(false);
         statusLabel_->setText("Counts loading failed");
         return false;
     }
@@ -2934,6 +3075,7 @@ bool MainWindow::loadCounts(const QString& countsPath, double scaleFactor) {
     // Enable and activate the show counts toggle
     showCountsAction_->setEnabled(true);
     showCountsAction_->setChecked(true);
+    exportCountChartsAction_->setEnabled(true);
 
     statusLabel_->setText(QString("Loaded %1 count locations").arg(countsData_->counts.size()));
     LOG_INFO(QString("Counts loaded: %1 locations").arg(countsData_->counts.size()));
@@ -3072,6 +3214,293 @@ ScenarioPanel::LinkRow MainWindow::scenarioRow(uint32_t linkId) const {
         row.lengthM = link->length;
     }
     return row;
+}
+
+QString MainWindow::toggleKey(const QAction* action) {
+    static const QRegularExpression count(QStringLiteral("\\s*\\([\\d,]+\\)$"));
+    QString key = action->text();
+    key.remove(QLatin1Char('&'));
+    key.remove(count);
+    return key;
+}
+
+QList<QAction*> MainWindow::viewToggles() const {
+    const QList<const QAction*> notView = {
+        showInfoPanelAction_, showSelectedLinksAction_, showViewsAction_, panModeAction_};
+    QList<QAction*> toggles;
+    for (QAction* action : findChildren<QAction*>()) {
+        if (!action->isCheckable() || action->text().isEmpty() || notView.contains(action))
+            continue;
+        // The window's own actions and those of its menus. Not the ribbon's
+        // collapse button or the help window.
+        const QObject* owner = action->parent();
+        const bool ownMenu = qobject_cast<const QMenu*>(owner) &&
+                             owner->parent() == this && owner != speedMenu_;
+        if (owner == this || ownMenu) toggles << action;
+    }
+    return toggles;
+}
+
+QJsonObject MainWindow::currentView(const QString& name) const {
+    QJsonObject view{
+        {"name", name},
+        {"time", mapWidget_->simulationTime()},
+        {"center", QJsonArray{mapWidget_->viewCenterX(), mapWidget_->viewCenterY()}},
+        {"m_per_px", mapWidget_->metresPerPixel()},
+    };
+
+    QJsonObject actions;
+    for (const QAction* action : viewToggles()) {
+        if (!action->isEnabled()) continue;
+        // Of a group of choices, only the one that is chosen
+        if (action->actionGroup() && action->actionGroup()->isExclusive()) {
+            if (action->isChecked()) actions[toggleKey(action)] = true;
+        } else {
+            actions[toggleKey(action)] = action->isChecked();
+        }
+    }
+    view["actions"] = actions;
+
+    if (mapWidget_->isTrackingVehicle() && vehicleIndex_) {
+        view["track"] = vehicleIndex_->vehicleIdString(mapWidget_->trackedVehicle());
+    }
+    // Only a view that has links changes the selection when it is applied, so
+    // going to a view never loses a selection that the user is making
+    if (!scenarioPanel_->isEmpty()) {
+        QJsonArray links;
+        for (uint32_t id : scenarioPanel_->linkIds()) links.append(linkOriginalId(id));
+        view["select"] = links;
+    }
+    if (mapWidget_->heatmapVisible() && !mapWidget_->heatmapTitle().isEmpty()) {
+        view["heatmap"] = mapWidget_->heatmapTitle();
+    }
+
+    // The card picture: 2x the size on the card, so it is sharp on a
+    // high-DPI screen
+    const QImage image = mapWidget_->renderToImage(1);
+    if (!image.isNull()) {
+        const QSize size(192, 120);
+        const QImage scaled = image.scaled(size, Qt::KeepAspectRatioByExpanding,
+                                           Qt::SmoothTransformation);
+        const QImage thumb = scaled.copy((scaled.width() - size.width()) / 2,
+                                         (scaled.height() - size.height()) / 2,
+                                         size.width(), size.height());
+        QByteArray png;
+        QBuffer buffer(&png);
+        buffer.open(QIODevice::WriteOnly);
+        thumb.save(&buffer, "PNG");
+        view["thumbnail"] = QString::fromLatin1(png.toBase64());
+    }
+    return view;
+}
+
+void MainWindow::applyView(const QJsonObject& view) {
+    if (!networkIndex_ || !vehicleIndex_) return;
+    QStringList missing;
+
+    // A toggle that is not in the view, or is not available now (Show Link
+    // Counts before counts are loaded), stays as it is
+    const QList<QAction*> toggles = viewToggles();
+    const QJsonObject actions = view.value("actions").toObject();
+    for (auto it = actions.begin(); it != actions.end(); ++it) {
+        QAction* found = nullptr;
+        for (QAction* action : toggles) {
+            if (toggleKey(action) == it.key()) { found = action; break; }
+        }
+        if (!found || !found->isEnabled()) continue;
+        // trigger() so that the slots on triggered() and on toggled() both run
+        const bool on = it.value().toBool();
+        if (found->actionGroup() && found->actionGroup()->isExclusive()) {
+            if (on && !found->isChecked()) found->trigger();
+        } else if (found->isChecked() != on) {
+            found->trigger();
+        }
+    }
+
+    const QString heatmap = view.value("heatmap").toString();
+    if (heatmap.isEmpty()) {
+        if (mapWidget_->heatmapVisible()) onClearHeatmap();
+    } else if (!mapWidget_->heatmapVisible() || mapWidget_->heatmapTitle() != heatmap) {
+        if (heatmapActivityTypes_.contains(heatmap)) onHeatmapTypeSelected(heatmap);
+        else missing << QString("heatmap %1").arg(heatmap);
+    }
+
+    if (view.contains("select")) {
+        std::vector<ScenarioPanel::LinkRow> rows;
+        int notFound = 0;
+        for (const QJsonValue& v : view.value("select").toArray()) {
+            const uint32_t id = networkIndex_->findLinkByOriginalId(v.toString().toStdString());
+            if (id == UINT32_MAX) ++notFound;
+            else rows.push_back(scenarioRow(id));
+        }
+        scenarioPanel_->clearLinks();
+        if (!rows.empty()) scenarioPanel_->addLinks(rows);
+        if (notFound > 0) missing << QString("%1 link(s)").arg(notFound);
+    }
+
+    if (view.contains("time")) {
+        mapWidget_->setSimulationTime(static_cast<float>(view.value("time").toDouble()));
+    }
+    const QJsonArray center = view.value("center").toArray();
+    if (center.size() == 2) {
+        mapWidget_->setView(center[0].toDouble(), center[1].toDouble(),
+                            view.value("m_per_px").toDouble(mapWidget_->metresPerPixel()));
+    }
+
+    const QString track = view.value("track").toString();
+    if (track.isEmpty()) {
+        if (mapWidget_->isTrackingVehicle()) mapWidget_->stopTracking();
+    } else {
+        const uint32_t id = vehicleIdOf(track);
+        if (id == kNoVehicle) missing << QString("vehicle %1").arg(track);
+        else mapWidget_->setTrackedVehicle(id);
+    }
+
+    QString text = QString("View \"%1\"").arg(view.value("name").toString());
+    if (!missing.isEmpty()) text += "  |  Not in this run: " + missing.join(", ");
+    statusLabel_->setText(text);
+}
+
+void MainWindow::saveView() {
+    if (!networkIndex_ || !vehicleIndex_) return;
+    const QString name = viewsPanel_->nextName();
+    viewsPanel_->addView(currentView(name));
+    sidePanel_->showPage(viewsPage_);
+    statusLabel_->setText(QString("Saved \"%1\". To rename it, press F2 in the Views panel.")
+        .arg(name));
+}
+
+void MainWindow::saveViewsOverTime() {
+    if (!networkIndex_ || !vehicleIndex_) return;
+    SaveOverTimeDialog dialog(mapWidget_->simulationTime(),
+                              VehicleIndex::toSeconds(vehicleIndex_->minTime()),
+                              VehicleIndex::toSeconds(vehicleIndex_->maxTime()),
+                              viewsPanel_->nextName(), this);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    const bool wasPlaying = mapWidget_->isPlaying();
+    if (wasPlaying) mapWidget_->setPlaying(false);
+    const float before = mapWidget_->simulationTime();
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const std::vector<double> times = dialog.times();
+    for (double t : times) {
+        // The vehicles at that time, for the card picture
+        mapWidget_->setSimulationTime(static_cast<float>(t));
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        viewsPanel_->addView(currentView(dialog.name() + " · " + ViewsPanel::clockText(t)));
+    }
+    mapWidget_->setSimulationTime(before);
+    QApplication::restoreOverrideCursor();
+    if (wasPlaying) mapWidget_->setPlaying(true);
+
+    sidePanel_->showPage(viewsPage_);
+    statusLabel_->setText(QString("Saved %1 views of \"%2\"").arg(times.size()).arg(dialog.name()));
+}
+
+// A file name without extension from `text`: "08:00" becomes "08.00", and
+// the other characters that Windows does not allow become "_". " (2)", " (3)"
+// ... is added to a name that is in `used`, and the result is added to it.
+static QString uniqueFileStem(const QString& text, const QString& fallback,
+                              QStringList& used) {
+    QString stem = text;
+    stem.replace(QLatin1Char(':'), QLatin1Char('.'));
+    stem.replace(QRegularExpression(QStringLiteral("[\\\\/*?\"<>|]")), QStringLiteral("_"));
+    stem = stem.trimmed();
+    if (stem.isEmpty()) stem = fallback;
+    QString unique = stem;
+    for (int n = 2; used.contains(unique, Qt::CaseInsensitive); ++n) {
+        unique = QString("%1 (%2)").arg(stem).arg(n);
+    }
+    used << unique;
+    return unique;
+}
+
+void MainWindow::captureViews() {
+    if (!networkIndex_ || !vehicleIndex_ || viewsPanel_->count() == 0) return;
+    QStringList names;
+    for (int i = 0; i < viewsPanel_->count(); ++i) {
+        names << viewsPanel_->view(i).value("name").toString();
+    }
+    const QString runFolder = QFileInfo(networkFilePath_).absolutePath();
+    CaptureViewsDialog dialog(names, QDir(runFolder).absoluteFilePath("captures"),
+                              mapWidget_->size(), this);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    const QString folder = dialog.folder();
+    if (!QDir().mkpath(folder)) {
+        QMessageBox::warning(this, "Capture Views",
+            QString("Cannot make the folder\n%1").arg(QDir::toNativeSeparators(folder)));
+        return;
+    }
+
+    const bool wasPlaying = mapWidget_->isPlaying();
+    if (wasPlaying) mapWidget_->setPlaying(false);
+    // The map comes back to this after the capture. An empty selection is
+    // written, so that the links of the last view do not stay.
+    QJsonObject before = currentView(QString());
+    if (!before.contains("select")) before["select"] = QJsonArray();
+
+    const QList<int> rows = dialog.rows();
+    QProgressDialog progress(QString(), "Cancel", 0, static_cast<int>(rows.size()), this);
+    progress.setWindowTitle("Capture Views");
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setMinimumWidth(360);
+
+    // Lets the window paint and the heatmap worker report, without a busy loop
+    auto pause = [](int ms) {
+        QEventLoop loop;
+        QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+        loop.exec();
+    };
+
+    int saved = 0;
+    QStringList failed;
+    QStringList usedNames;
+    for (int i = 0; i < rows.size() && !progress.wasCanceled(); ++i) {
+        const QJsonObject view = viewsPanel_->view(rows[i]);
+        const QString name = view.value("name").toString();
+        const QString label = QString("View %1 of %2: %3").arg(i + 1).arg(rows.size()).arg(name);
+        progress.setLabelText(label);
+        progress.setValue(i);
+
+        applyView(view);
+        pause(50);
+        // A heatmap on a large network takes a while to compute
+        while (heatmapRunning_ && !progress.wasCanceled()) {
+            progress.setLabelText(label + "\nWaiting for the heatmap...");
+            pause(200);
+        }
+        if (progress.wasCanceled()) break;
+
+        const QString unique = uniqueFileStem(name, QString("view %1").arg(rows[i] + 1),
+                                              usedNames);
+
+        const QString path = QDir(folder).absoluteFilePath(unique + ".png");
+        const QImage image = mapWidget_->renderToImage(dialog.scale());
+        if (image.isNull() || !image.save(path, "PNG")) {
+            failed << name;
+            LOG_ERROR(QString("Capture Views: cannot save %1").arg(path));
+        } else {
+            ++saved;
+        }
+    }
+    const bool cancelled = progress.wasCanceled();
+    progress.setValue(static_cast<int>(rows.size()));
+
+    applyView(before);
+    if (wasPlaying) mapWidget_->setPlaying(true);
+
+    LOG_INFO(QString("Capture Views: %1 image(s) in %2").arg(saved).arg(folder));
+    statusLabel_->setText(QString("Saved %1 image(s) in %2%3")
+        .arg(saved).arg(QDir::toNativeSeparators(folder), cancelled ? " (cancelled)" : ""));
+    if (!failed.isEmpty()) {
+        QMessageBox::warning(this, "Capture Views",
+            QString("Cannot save the image of:\n%1").arg(failed.join("\n")));
+    }
+    if (saved > 0 && dialog.openFolderWhenDone()) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+    }
 }
 
 void MainWindow::zoomToLink(uint32_t linkId) {
@@ -3374,6 +3803,135 @@ void MainWindow::onCountLinkClicked(uint32_t linkId) {
     auto* dialog = new CountsChartDialog(countData, linkOriginalId, this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->show();
+}
+
+void MainWindow::exportCountCharts() {
+    if (!countsData_ || !networkIndex_) return;
+
+    // The stations on the links of the Selected Links page, in list order
+    std::vector<size_t> onSelected;
+    for (uint32_t id : scenarioPanel_->linkIds()) {
+        const auto it = countsData_->linkToCount.find(id);
+        if (it != countsData_->linkToCount.end() &&
+            std::find(onSelected.begin(), onSelected.end(), it->second) == onSelected.end()) {
+            onSelected.push_back(it->second);
+        }
+    }
+    const QString runFolder = QFileInfo(networkFilePath_).absolutePath();
+    ExportCountChartsDialog dialog(static_cast<int>(countsData_->counts.size()),
+                                   static_cast<int>(onSelected.size()),
+                                   QDir(runFolder).absoluteFilePath("count-charts"), this);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    std::vector<size_t> stations = onSelected;
+    if (!dialog.selectedOnly()) {
+        stations.resize(countsData_->counts.size());
+        for (size_t i = 0; i < stations.size(); ++i) stations[i] = i;
+    }
+    const QString folder = dialog.folder();
+    if (!QDir().mkpath(folder)) {
+        QMessageBox::warning(this, "Export Count Charts",
+            QString("Cannot make the folder\n%1").arg(QDir::toNativeSeparators(folder)));
+        return;
+    }
+
+    QProgressDialog progress(QString(), "Cancel", 0, static_cast<int>(stations.size()), this);
+    progress.setWindowTitle("Export Count Charts");
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(500);
+    progress.setMinimumWidth(360);
+
+    // GEH of one hour: the usual measure of fit for counts. Under 5 is a good fit.
+    auto geh = [](double simulated, double observed) {
+        const double sum = simulated + observed;
+        return sum > 0.0 ? std::sqrt(2.0 * (simulated - observed) * (simulated - observed) / sum)
+                         : 0.0;
+    };
+    auto csvField = [](QString text) {
+        if (!text.contains(QLatin1Char(',')) && !text.contains(QLatin1Char('"'))) return text;
+        text.replace(QStringLiteral("\""), QStringLiteral("\"\""));
+        return QString("\"%1\"").arg(text);
+    };
+
+    QStringList rows{"link_id,station_id,observed_total,simulated_total,ratio,difference,"
+                     "max_hourly_geh,hours_geh_below_5,image"};
+    QStringList usedNames;
+    QStringList failed;
+    int saved = 0;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    for (size_t i = 0; i < stations.size() && !progress.wasCanceled(); ++i) {
+        progress.setValue(static_cast<int>(i));
+        const CountData& count = countsData_->counts[stations[i]];
+        const QString link = linkOriginalId(count.linkId);
+        const QString station = QString::fromStdString(count.stationId);
+        progress.setLabelText(QString("Station %1 of %2: link %3")
+            .arg(i + 1).arg(stations.size()).arg(link));
+
+        uint64_t observed = 0;
+        uint64_t simulated = 0;
+        double maxGeh = 0.0;
+        int goodHours = 0;
+        for (int h = 0; h < 24; ++h) {
+            observed += count.groundTruthVolumes[h];
+            simulated += count.simulatedVolumes[h];
+            const double g = geh(count.simulatedVolumes[h], count.groundTruthVolumes[h]);
+            maxGeh = std::max(maxGeh, g);
+            if (g < 5.0) ++goodHours;
+        }
+        const double ratio = observed > 0 ? static_cast<double>(simulated) / observed : 0.0;
+
+        QString title = QString("Link %1").arg(link);
+        if (!station.isEmpty()) title += QString(" · station %1").arg(station);
+        title += QString(" · observed %1 · simulated %2")
+            .arg(QLocale().toString(static_cast<qulonglong>(observed)),
+                 QLocale().toString(static_cast<qulonglong>(simulated)));
+        if (observed > 0) title += QString(" (%1 %)").arg(std::round(ratio * 100.0), 0, 'f', 0);
+
+        const QString stem = uniqueFileStem(
+            station.isEmpty() ? QString("link %1").arg(link)
+                              : QString("link %1 - %2").arg(link, station),
+            QString("station %1").arg(i + 1), usedNames);
+        const QString path = QDir(folder).absoluteFilePath(stem + ".png");
+        const QImage image = countChartImage(count, title, dialog.scale());
+        if (image.isNull() || !image.save(path, "PNG")) {
+            failed << QString("link %1").arg(link);
+            LOG_ERROR(QString("Export Count Charts: cannot save %1").arg(path));
+        } else {
+            ++saved;
+        }
+
+        rows << QStringList{
+            csvField(link), csvField(station),
+            QString::number(observed), QString::number(simulated),
+            observed > 0 ? QString::number(ratio, 'f', 3) : QString(),
+            QString::number(static_cast<qint64>(simulated) - static_cast<qint64>(observed)),
+            QString::number(maxGeh, 'f', 2), QString::number(goodHours),
+            csvField(stem + ".png"),
+        }.join(QLatin1Char(','));
+    }
+    const bool cancelled = progress.wasCanceled();
+    progress.setValue(static_cast<int>(stations.size()));
+
+    if (dialog.writeSummary() && !cancelled) {
+        QSaveFile file(QDir(folder).absoluteFilePath("summary.csv"));
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text) ||
+            file.write((rows.join(QLatin1Char('\n')) + QLatin1Char('\n')).toUtf8()) < 0 ||
+            !file.commit()) {
+            failed << "summary.csv";
+        }
+    }
+    QApplication::restoreOverrideCursor();
+
+    LOG_INFO(QString("Export Count Charts: %1 chart(s) in %2").arg(saved).arg(folder));
+    statusLabel_->setText(QString("Saved %1 count chart(s) in %2%3")
+        .arg(saved).arg(QDir::toNativeSeparators(folder), cancelled ? " (cancelled)" : ""));
+    if (!failed.isEmpty()) {
+        QMessageBox::warning(this, "Export Count Charts",
+            QString("Cannot save:\n%1").arg(failed.join("\n")));
+    }
+    if (saved > 0 && dialog.openFolderWhenDone()) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+    }
 }
 
 // Video recording implementation

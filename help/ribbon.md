@@ -53,6 +53,7 @@ The Air tab shows only when the run has aircraft. See [Air traffic](air-traffic.
 | Group | Button | Use |
 |-------|--------|-----|
 | Heatmap | Activity Heatmap | Show the density of one activity type. |
+| Counts | Export Count Charts | Save the chart of each count station, and a table of the stations. |
 
 ## Scenario
 
@@ -61,6 +62,17 @@ The Air tab shows only when the run has aircraft. See [Air traffic](air-traffic.
 | Selection | Selected Links | Show or hide the Selected Links page. |
 | Selection | Clear Selection | Remove all links from the scenario. |
 | Export | Export Scenario | Save the scenario file. |
+
+## Views
+
+| Group | Button | Use | Shortcut |
+|-------|--------|-----|----------|
+| Views | Save View | Save the time, the map position, the layers, the selected links and the heatmap as a view. | Ctrl+B |
+| Views | Save Over Time | Save a view at each time, for example every hour. | |
+| Views | Views Panel | Show or hide the Views page. | |
+| Capture | Capture Views | Save a PNG image of each view. | |
+| Share | Import Views | Add the views of a views file to this run. | |
+| Share | Export Views | Save the views of this run to a file. | |
 
 ## Export
 

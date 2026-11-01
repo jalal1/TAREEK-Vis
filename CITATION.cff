@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you use TAREEK-Vis, please cite the paper below."
+title: TAREEK-Vis
+type: software
+authors:
+  - given-names: Jalal
+    family-names: Khalil
+  - given-names: Arein
+    family-names: Duaibes
+  - given-names: Da
+    family-names: Yan
+  - given-names: Virginia
+    family-names: Sisiopiku
+version: 1.4.0
+date-released: 2026-10-17
+license: GPL-3.0-only
+repository-code: https://github.com/jalal1/TAREEK-Vis
+preferred-citation:
+  type: conference-paper
+  title: "TAREEK-Vis: An Interactive Visualization Tool for Large-Scale MATSim Traffic Simulations [Demo]"
+  authors:
+    - given-names: Jalal
+      family-names: Khalil
+    - given-names: Arein
+      family-names: Duaibes
+    - given-names: Da
+      family-names: Yan
+    - given-names: Virginia
+      family-names: Sisiopiku
+  collection-title: "Proceedings of The 34th ACM International Conference on Advances in Geographic Information Systems (SIGSPATIAL '26)"
+  publisher:
+    name: ACM
+  year: 2026
+  doi: 10.1145/3841645.3843122
+  url: https://doi.org/10.1145/3841645.3843122

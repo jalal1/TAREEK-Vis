@@ -43,12 +43,12 @@ TAREEK-Vis was accepted as a demo paper at
 > **TAREEK-Vis: An Interactive Visualization Tool for Large-Scale MATSim
 > Traffic Simulations [Demo]**. In *Proceedings of The 34th ACM International
 > Conference on Advances in Geographic Information Systems (SIGSPATIAL '26)*.
-> ACM, New York, NY, USA.
+> ACM, New York, NY, USA. https://doi.org/10.1145/3841645.3843122
 
-📄 [Read the paper (pre-publication version)](assets/tareek_vis_sigspatial2026_demo.pdf)
+📄 [Read the paper (author version)](https://jalal1.github.io/assets/papers/TAREEK-Vis_SIGSPATIAL2026.pdf)
 
-This is the pre-publication version; the camera-ready copy will replace it
-here once available, along with the official ACM DOI link.
+The DOI link will open the paper in the ACM Digital Library when the
+proceedings are published.
 
 ## Features
 

@@ -117,12 +117,38 @@ set(HEADERS
 # Create executable
 add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
 
+# The tareek-air features (Air tab, air status, air help page). tareek-air is
+# not published yet, so a normal build and a release do not show them.
+option(TAREEK_AIR "Show the tareek-air features in the user interface" OFF)
+if(TAREEK_AIR)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE TAREEK_AIR=1)
+else()
+    target_compile_definitions(${PROJECT_NAME} PRIVATE TAREEK_AIR=0)
+endif()
+
 # The user guide: every page and image in help/, built into the executable.
 # A new page is found when CMake runs again, so it needs no line here.
 file(GLOB HELP_FILES CONFIGURE_DEPENDS
     ${CMAKE_SOURCE_DIR}/help/*.md
     ${CMAKE_SOURCE_DIR}/help/images/*.png
 )
+if(NOT TAREEK_AIR)
+    # No air page, and an index without its line
+    list(REMOVE_ITEM HELP_FILES
+        ${CMAKE_SOURCE_DIR}/help/air-traffic.md
+        ${CMAKE_SOURCE_DIR}/help/index.md
+    )
+    file(READ ${CMAKE_SOURCE_DIR}/help/index.md HELP_INDEX)
+    string(REGEX REPLACE "[^\n]*\\(air-traffic\\.md\\)[^\n]*\r?\n" "" HELP_INDEX "${HELP_INDEX}")
+    set(HELP_INDEX_FILE ${CMAKE_BINARY_DIR}/help/index.md)
+    # Write through configure_file, so the file changes only when the text does
+    file(WRITE ${CMAKE_BINARY_DIR}/help/index.md.in "${HELP_INDEX}")
+    configure_file(${CMAKE_BINARY_DIR}/help/index.md.in ${HELP_INDEX_FILE} COPYONLY)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        ${CMAKE_SOURCE_DIR}/help/index.md)
+    set_source_files_properties(${HELP_INDEX_FILE} PROPERTIES QT_RESOURCE_ALIAS index.md)
+    list(APPEND HELP_FILES ${HELP_INDEX_FILE})
+endif()
 qt_add_resources(${PROJECT_NAME} "help"
     PREFIX "/help"
     BASE ${CMAKE_SOURCE_DIR}/help

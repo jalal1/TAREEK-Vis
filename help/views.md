@@ -5,7 +5,7 @@ later. A view keeps:
 
 - the simulation time
 - the map position and the zoom
-- the layers and the vehicle style (the toggles of the View, Transit and Air
+- the layers and the vehicle style (the toggles of the View and Transit
   tabs)
 - the selected links, if there are some
 - the vehicle that the map follows, if there is one

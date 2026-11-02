@@ -59,6 +59,12 @@
 
 namespace simvis {
 
+namespace {
+// The Air tab and the air status show only in a build with the CMake option
+// TAREEK_AIR (tareek-air is not published yet)
+constexpr bool kAirFeatures = TAREEK_AIR;
+}
+
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
@@ -1821,7 +1827,7 @@ void MainWindow::applyLoadedFiles(LoadedFiles& files, bool fromCache, const QStr
     populateHeatmapMenu();
     populateOtherModesMenu();
     populateAltitudeBandMenu();
-    ribbon_->setTabVisible("Air", mapWidget_->hasAirVehicles());
+    ribbon_->setTabVisible("Air", kAirFeatures && mapWidget_->hasAirVehicles());
 
     // Compute the maps that are not cached yet, in the background, so the first
     // click on a type is instant. Deferred so the window is shown and painted
@@ -2887,7 +2893,7 @@ void MainWindow::fillPersonTrips(VehicleInfo& info, uint32_t personId, TimeMs no
 void MainWindow::onActiveVehicleCountChanged(size_t count) {
     QString text = QString("Vehicles: %1").arg(count);
     // A run with aircraft: also the aircraft, losses and holds now
-    if (mapWidget_->hasAirVehicles()) {
+    if (kAirFeatures && mapWidget_->hasAirVehicles()) {
         const MapWidget::AirStatus air = mapWidget_->airStatus();
         text += QString("  |  Aircraft: %1  |  Losses: %2  |  Holds: %3")
                     .arg(air.aircraft).arg(air.losses).arg(air.holds);

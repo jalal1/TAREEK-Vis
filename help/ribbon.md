@@ -36,18 +36,6 @@
 | Stops | Bus Stops | Show or hide the stops. |
 | Style | Route Thickness | Set the line width of the routes. |
 
-## Air
-
-The Air tab shows only when the run has aircraft. See [Air traffic](air-traffic.md).
-
-| Group | Button | Use |
-|-------|--------|-----|
-| Layers | Air Links | Show or hide the air links. Off at the start. |
-| Layers | Vertiports, Trails | Show or hide the vertiport marks or the trails. |
-| Height | Altitude Lift | How far an aircraft symbol moves up for its height. |
-| Height | Altitude Band | Show only the aircraft in one band of height. |
-| Events | Losses, Holds | Show or hide the losses of separation or the holds. |
-
 ## Analysis
 
 | Group | Button | Use |

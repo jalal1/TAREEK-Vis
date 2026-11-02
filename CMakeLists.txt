@@ -59,8 +59,19 @@ set(SOURCES
     src/ui/scene_runner.cpp
     src/ui/ribbon/ribbon.cpp
     src/ui/ribbon/icons/ribbon_icons.qrc
+    assets/branding/branding.qrc
     third_party/pugixml.cpp
 )
+
+# The icon of the .exe file, shown before the program starts
+if(WIN32)
+    list(APPEND SOURCES assets/branding/tareek-vis.rc)
+    # Without this flag, windres runs the preprocessor through cmd.exe, and
+    # an AutoRun entry in cmd (for example from Anaconda) can make it fail
+    if(MINGW)
+        string(APPEND CMAKE_RC_FLAGS " --use-temp-file")
+    endif()
+endif()
 
 set(HEADERS
     src/core/types.h

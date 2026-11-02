@@ -31,7 +31,7 @@ Compression=lzma2
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
-SetupIconFile=
+SetupIconFile=..\assets\branding\tareek-vis.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Languages]

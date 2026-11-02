@@ -1,0 +1,11 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/branding">
+        <file>tareek-vis-mark-16.png</file>
+        <file>tareek-vis-mark-24.png</file>
+        <file>tareek-vis-mark-32.png</file>
+        <file>tareek-vis-mark-48.png</file>
+        <file>tareek-vis-mark-64.png</file>
+        <file>tareek-vis-icon-256.png</file>
+    </qresource>
+</RCC>

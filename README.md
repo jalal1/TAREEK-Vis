@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/branding/tareek-vis-banner.png" width="520" alt="TAREEK-Vis" /></p>
+
 # TAREEK-Vis - Simulation Visualizer
 
 A high-performance desktop application for visualizing MATSim simulation outputs (network and events).

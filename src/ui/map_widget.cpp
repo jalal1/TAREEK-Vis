@@ -7,6 +7,7 @@
 #include <QWheelEvent>
 #include <QOpenGLFramebufferObject>
 #include <QPainter>
+#include <QIcon>
 #include <algorithm>
 #include <cmath>
 
@@ -959,6 +960,15 @@ void MapWidget::drawEmptyState(QPainter& painter) {
     hintFont.setPointSize(10);
 
     const QRect area = rect();
+
+    // The logo over the text, if the map has the height for it
+    constexpr int kLogoSize = 112;
+    const int logoTop = area.center().y() - 34 - 20 - kLogoSize;
+    if (logoTop >= area.top() + 8) {
+        const QPixmap logo = QIcon(":/branding/tareek-vis-icon-256.png")
+                                 .pixmap(QSize(kLogoSize, kLogoSize), devicePixelRatioF());
+        painter.drawPixmap(QRect(area.center().x() - kLogoSize / 2, logoTop, kLogoSize, kLogoSize), logo);
+    }
 
     painter.setFont(titleFont);
     painter.setPen(QColor(190, 190, 200));

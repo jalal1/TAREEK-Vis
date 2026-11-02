@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QIcon>
 #include <QSurfaceFormat>
 #include <QMessageBox>
 #include <QFileInfo>
@@ -24,6 +25,12 @@ int main(int argc, char* argv[]) {
         app.setApplicationName("TAREEK-Vis");
         app.setApplicationVersion(TAREEK_VIS_VERSION);
         app.setOrganizationName("TAREEK-Vis");
+        // The title bar and the taskbar: the mark alone at small sizes, the
+        // tile with the name at large sizes
+        QIcon appIcon;
+        for (const char* file : {"mark-16", "mark-24", "mark-32", "mark-48", "mark-64", "icon-256"})
+            appIcon.addFile(QString(":/branding/tareek-vis-%1.png").arg(file));
+        app.setWindowIcon(appIcon);
 
         LOG_INFO("QApplication created");
 

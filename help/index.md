@@ -1,4 +1,4 @@
-# TAREEK-Vis Help
+![TAREEK-Vis Help and Documentation](images/logo.png)
 
 TAREEK-Vis shows the output of a MATSim simulation on a map. You can play
 the vehicles over the day, examine roads, vehicles and persons, compare the

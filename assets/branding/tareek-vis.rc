@@ -1,0 +1,3 @@
+// The icon of TAREEK-Vis.exe, which Windows shows in Explorer, the Start
+// menu and the shortcuts before the program starts.
+IDI_ICON1 ICON "tareek-vis.ico"

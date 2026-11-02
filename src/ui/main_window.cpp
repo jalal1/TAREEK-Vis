@@ -638,6 +638,7 @@ void MainWindow::setupActions() {
         // Rich text, so that the links open in the browser
         QMessageBox box(this);
         box.setWindowTitle("About TAREEK-Vis");
+        box.setIconPixmap(QIcon(":/branding/tareek-vis-icon-256.png").pixmap(96, 96));
         box.setTextFormat(Qt::RichText);
         box.setTextInteractionFlags(Qt::TextBrowserInteraction);
         box.setText(

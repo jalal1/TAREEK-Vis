@@ -20,6 +20,7 @@ set(SOURCES
     src/core/modes.cpp
     src/core/video_recorder.cpp
     src/core/logger.cpp
+    src/core/update_checker.cpp
     src/parsers/network_parser.cpp
     src/parsers/event_parser.cpp
     src/parsers/preprocessor.cpp
@@ -68,6 +69,7 @@ set(HEADERS
     src/core/modes.h
     src/core/video_recorder.h
     src/core/logger.h
+    src/core/update_checker.h
     src/parsers/network_parser.h
     src/parsers/event_parser.h
     src/parsers/preprocessor.h

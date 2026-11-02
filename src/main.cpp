@@ -56,6 +56,7 @@ int main(int argc, char* argv[]) {
                 mainWindow.loadFolder(path);
             }, Qt::QueuedConnection);
         }
+        if (!sceneRunner) mainWindow.startUpdateCheck();
 
         int ret = app.exec();
         LOG_INFO(QString("TAREEK-Vis exiting, code %1").arg(ret));

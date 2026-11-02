@@ -37,6 +37,7 @@ class HelpWindow;
 class SidePanel;
 class ViewsPanel;
 class LoadingIndicator;
+class UpdateChecker;
 
 // Hourly traffic for every link: 24 counts per link, laid end to end and
 // indexed by link id (ids are interned sequentially from 0). A flat array
@@ -57,6 +58,10 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
+
+    // The daily check for a new release. main() calls it, except for a
+    // --scenes run, which must not go to the network.
+    void startUpdateCheck();
 
 public slots:
     void openFolder();
@@ -325,6 +330,11 @@ private:
     QAction* keyboardShortcutsAction_ = nullptr;
     QAction* userGuideAction_ = nullptr;
     QAction* reportProblemAction_ = nullptr;
+    QAction* checkUpdatesAction_ = nullptr;
+    QAction* autoCheckUpdatesAction_ = nullptr;
+    UpdateChecker* updateChecker_ = nullptr;
+    // Link in the status bar when a newer release exists
+    QLabel* updateLabel_ = nullptr;
     // Made when the help is first opened
     HelpWindow* helpWindow_ = nullptr;
     // The Clear and Export buttons of the "Selected links" panel

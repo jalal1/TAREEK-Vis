@@ -71,6 +71,7 @@ proceedings are published.
 - Export the map as PNG or PDF, the hourly chart as PNG or PDF, and a video
   as MP4.
 - Handles large runs (events files of 2 GB and more) with a disk cache.
+- Tells you when a new version is available. To update, run the new Setup.
 
 ## Documentation
 

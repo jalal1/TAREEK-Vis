@@ -11,6 +11,26 @@
 To use TAREEK-Vis without an installation, download
 `TAREEK-Vis-x.y.z-portable.zip`, unzip it and run `TAREEK-Vis.exe`.
 
+You do not need the "Source code" files of a release. GitHub adds them to
+every release.
+
+## Update TAREEK-Vis
+
+When a new version is available, the status bar shows
+**Version x.y.z is available**. You can also click
+**Help > Check for Updates**.
+
+- **If you used the Setup:** click the link in the status bar, download the
+  new `TAREEK-Vis-Setup-x.y.z.exe` and run it. You do not need to uninstall
+  the old version first. The Setup replaces it in the same folder. Your
+  settings and recent folders stay.
+- **If you use the portable zip:** close TAREEK-Vis, delete the old folder
+  and unzip the new zip.
+
+To get an email for each new version, sign in to GitHub, open the
+[TAREEK-Vis page](https://github.com/jalal1/TAREEK-Vis) and click
+**Watch > Custom > Releases**.
+
 ## Open your first run
 
 1. Click **Home > Open Folder** (Ctrl+O).

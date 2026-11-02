@@ -12,6 +12,7 @@
 #include "views_dialogs.h"
 #include "core/config.h"
 #include "core/logger.h"
+#include "core/update_checker.h"
 #include "analysis/nkde_scatter.h"
 
 #include <QtConcurrent/QtConcurrent>
@@ -643,7 +644,8 @@ void MainWindow::setupActions() {
             "<p><b>Privacy:</b> TAREEK-Vis reads your files on this computer only. "
             "It does not send them anywhere and collects no usage data. "
             "It connects to the internet only to download map tiles while "
-            "the background map is on. See Help &gt; User Guide &gt; "
+            "the background map is on, and to check once a day for a new "
+            "version (Help &gt; Check Daily). See Help &gt; User Guide &gt; "
             "Privacy and security.</p>"
             "<p>Copyright (c) 2026 TAREEK-Vis Contributors. Licensed under the "
             "<a href='https://www.gnu.org/licenses/gpl-3.0.html'>GNU General Public "
@@ -1084,6 +1086,24 @@ void MainWindow::setupRibbon() {
         QDesktopServices::openUrl(QUrl("https://github.com/jalal1/TAREEK-Vis/issues/new"));
     });
 
+    checkUpdatesAction_ = new QAction("Check for &Updates", this);
+    checkUpdatesAction_->setIcon(ribbonIcon("refresh-cw"));
+    checkUpdatesAction_->setIconText("Check for\nUpdates");
+    checkUpdatesAction_->setToolTip("Ask GitHub if there is a newer version of TAREEK-Vis");
+    connect(checkUpdatesAction_, &QAction::triggered, this, [this]() {
+        updateChecker_->checkNow();
+    });
+
+    autoCheckUpdatesAction_ = new QAction("Check Daily", this);
+    autoCheckUpdatesAction_->setCheckable(true);
+    autoCheckUpdatesAction_->setChecked(UpdateChecker::autoCheckEnabled());
+    autoCheckUpdatesAction_->setToolTip(
+        "At startup, check for a new version once a day. Only the release "
+        "information is downloaded from GitHub.");
+    connect(autoCheckUpdatesAction_, &QAction::toggled, this, [](bool on) {
+        UpdateChecker::setAutoCheckEnabled(on);
+    });
+
     auto* help = ribbon_->addTab("Help");
 
     auto* helpGroup = help->addGroup("Help");
@@ -1091,6 +1111,10 @@ void MainWindow::setupRibbon() {
     helpGroup->addLargeAction(keyboardShortcutsAction_);
     helpGroup->addLargeAction(reportProblemAction_);
     helpGroup->addLargeAction(aboutAction_);
+
+    auto* updatesGroup = help->addGroup("Updates");
+    updatesGroup->addLargeAction(checkUpdatesAction_);
+    updatesGroup->addSmallAction(autoCheckUpdatesAction_);
 
     // The ribbon takes the place of the menu bar
     setMenuWidget(ribbon_);
@@ -1127,6 +1151,47 @@ void MainWindow::setupStatusBar() {
 
     vehicleCountLabel_ = new QLabel("Vehicles: 0");
     statusBar()->addPermanentWidget(vehicleCountLabel_);
+
+    // New release. A link, not a dialog, so that the automatic check never
+    // interrupts the work. It stays until the app closes.
+    updateLabel_ = new QLabel();
+    updateLabel_->setTextFormat(Qt::RichText);
+    updateLabel_->setOpenExternalLinks(true);
+    updateLabel_->setToolTip("Open the release page. To update, download and run the new Setup.");
+    updateLabel_->hide();
+    statusBar()->addPermanentWidget(updateLabel_);
+
+    updateChecker_ = new UpdateChecker(this);
+    connect(updateChecker_, &UpdateChecker::updateAvailable, this,
+            [this](const QString& version, const QUrl& page, bool manual) {
+        updateLabel_->setText(QString("<a href=\"%1\">Version %2 is available</a>")
+                                  .arg(page.toString(QUrl::FullyEncoded).toHtmlEscaped(),
+                                       version.toHtmlEscaped()));
+        updateLabel_->show();
+        if (!manual) return;
+        const auto answer = QMessageBox::question(this, "Update Available",
+            QString("TAREEK-Vis %1 is available. You have version %2.\n\n"
+                    "Open the release page? To update, download the Setup file "
+                    "and run it. You do not need to uninstall the old version "
+                    "first. Your settings stay.")
+                .arg(version, TAREEK_VIS_VERSION));
+        if (answer == QMessageBox::Yes) QDesktopServices::openUrl(page);
+    });
+    connect(updateChecker_, &UpdateChecker::upToDate, this, [this](const QString& version) {
+        QMessageBox::information(this, "No Update",
+            QString("TAREEK-Vis %1 is the latest version.").arg(version));
+    });
+    connect(updateChecker_, &UpdateChecker::checkFailed, this, [this](const QString& reason) {
+        QMessageBox::warning(this, "Update Check Failed",
+            QString("Could not get the latest version from GitHub:\n%1\n\n"
+                    "Make sure that you are online, or look on the Releases page:\n%2")
+                .arg(reason, UpdateChecker::releasesPage().toString()));
+    });
+}
+
+void MainWindow::startUpdateCheck() {
+    // Let the window paint first; the request runs in the background
+    QTimer::singleShot(3000, updateChecker_, &UpdateChecker::checkAutomatically);
 }
 
 void MainWindow::setHeatmapStatus(const QString& message, HeatmapStatus state) {

@@ -4,20 +4,40 @@
 
 - TAREEK-Vis reads your simulation files on your computer. It does not send
   them anywhere.
-- TAREEK-Vis does not collect usage data and does not check for updates.
+- TAREEK-Vis does not collect usage data.
 - TAREEK-Vis writes its cache and its log file in the `.simvis_cache` folder,
   in the folder of the network file. To remove them, delete that folder.
 
 ## Internet connections
 
-TAREEK-Vis connects to the internet only while the background map is on
-(**View > Background Map**). It then downloads map tiles over HTTPS from the
-provider that you selected: OpenStreetMap, Esri or OpenTopoMap.
+TAREEK-Vis connects to the internet for two purposes only.
+
+### Map tiles
+
+While the background map is on (**View > Background Map**), TAREEK-Vis
+downloads map tiles over HTTPS from the provider that you selected:
+OpenStreetMap, Esri or OpenTopoMap.
 
 - The provider receives your IP address and the map areas that you look at.
   It does not receive your simulation data.
 - Each provider has its own privacy policy and terms of use.
-- To work offline, keep the background map off.
+
+### Update check
+
+At startup, at most once a day, TAREEK-Vis asks GitHub for the number of
+the latest version. It does the same when you click
+**Help > Check for Updates**.
+
+- GitHub receives your IP address and the version of TAREEK-Vis that you
+  use. It receives nothing else.
+- TAREEK-Vis does not download or install the update. It only shows a link
+  to the release page.
+- To stop the daily check, clear **Help > Check Daily**.
+
+### Work offline
+
+To work offline, keep the background map off and clear
+**Help > Check Daily**. TAREEK-Vis then makes no connections.
 
 The downloaded tiles are kept in
 `%LOCALAPPDATA%\TAREEK-Vis\TAREEK-Vis\cache\tiles` (at most 300 MB).

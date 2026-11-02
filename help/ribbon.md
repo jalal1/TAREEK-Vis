@@ -91,6 +91,8 @@ The Air tab shows only when the run has aircraft. See [Air traffic](air-traffic.
 | Help | Keyboard Shortcuts | Show the list of shortcuts. | |
 | Help | Report a Problem | Open the issue page of TAREEK-Vis on GitHub. | |
 | Help | About | Show the version and the licenses. | |
+| Updates | Check for Updates | Ask GitHub if there is a newer version. | |
+| Updates | Check Daily | At startup, check for a new version once a day. On by default. | |
 
 ## Search box
 

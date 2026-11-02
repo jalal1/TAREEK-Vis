@@ -40,6 +40,20 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
 
+; An update installs over the old version in the same folder. [Files] only
+; overwrites, so a DLL or Qt plugin that the new version no longer ships
+; would stay and could be loaded by mistake. Remove the deployed runtime
+; first. Settings and the tile cache are outside {app} and are kept.
+[InstallDelete]
+Type: files; Name: "{app}\*.dll"
+Type: filesandordirs; Name: "{app}\generic"
+Type: filesandordirs; Name: "{app}\iconengines"
+Type: filesandordirs; Name: "{app}\imageformats"
+Type: filesandordirs; Name: "{app}\networkinformation"
+Type: filesandordirs; Name: "{app}\platforms"
+Type: filesandordirs; Name: "{app}\styles"
+Type: filesandordirs; Name: "{app}\tls"
+
 [Files]
 Source: "..\dist\TAREEK-Vis\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 

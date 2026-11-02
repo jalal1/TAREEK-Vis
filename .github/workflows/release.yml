@@ -140,4 +140,17 @@ jobs:
           files: |
             installer/Output/TAREEK-Vis-Setup-${{ steps.version.outputs.version }}.exe
             TAREEK-Vis-${{ steps.version.outputs.version }}-portable.zip
+          # Placed above the generated change list
+          body: |
+            ## Download
+
+            - **Most users:** download `TAREEK-Vis-Setup-${{ steps.version.outputs.version }}.exe` and run it. No administrator rights are necessary.
+            - **No installation allowed on your computer:** download `TAREEK-Vis-${{ steps.version.outputs.version }}-portable.zip`, extract it and run `TAREEK-Vis.exe`.
+
+            You do not need the "Source code" files. GitHub adds them to every release.
+
+            ## Update
+
+            - **Setup:** run the new Setup. You do not need to uninstall the old version first. Your settings and recent folders stay.
+            - **Portable:** delete the old folder and extract the new zip.
           generate_release_notes: true

@@ -11,8 +11,8 @@ authors:
     family-names: Yan
   - given-names: Virginia
     family-names: Sisiopiku
-version: 1.4.0
-date-released: 2026-10-17
+version: 1.5.0
+date-released: 2026-11-01
 license: GPL-3.0-only
 repository-code: https://github.com/jalal1/TAREEK-Vis
 preferred-citation:

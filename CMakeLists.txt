@@ -26,6 +26,7 @@ set(SOURCES
     src/parsers/preprocessor.cpp
     src/parsers/transit_schedule_parser.cpp
     src/parsers/counts_parser.cpp
+    src/parsers/config_crs.cpp
     src/data/network_index.cpp
     src/data/vehicle_index.cpp
     src/analysis/nkdv_network.cpp
@@ -86,6 +87,7 @@ set(HEADERS
     src/parsers/preprocessor.h
     src/parsers/transit_schedule_parser.h
     src/parsers/counts_parser.h
+    src/parsers/config_crs.h
     src/data/network_index.h
     src/data/vehicle_index.h
     src/analysis/nkdv_network.h

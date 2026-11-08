@@ -21,7 +21,9 @@ TAREEK-Vis reads standard MATSim output files. Each file can be plain XML
 ```
 
 The `coordinateReferenceSystem` attribute is optional. The background map
-needs it.
+needs a CRS. If the network file has no CRS, TAREEK-Vis uses the
+`coordinateSystem` parameter of the MATSim config file (`output_config.xml`
+or `config.xml`) in the folder of the network.
 
 ## Events (required)
 

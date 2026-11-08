@@ -449,6 +449,8 @@ private:
     // A background map needs the network's CRS. Turn it off when the scenario
     // just loaded has none, so old tiles do not stay under a network they do
     // not match.
+    // If the network gave no CRS, take it from the run's MATSim config
+    void useRunConfigCrs();
     void checkBackgroundMapCrs();
 
     // Close the side panel and drop the inspected link with it

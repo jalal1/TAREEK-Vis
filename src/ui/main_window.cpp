@@ -61,7 +61,7 @@ namespace simvis {
 
 namespace {
 // The Air tab and the air status show only in a build with the CMake option
-// TAREEK_AIR (tareek-air is not published yet)
+// TAREEK_AIR (TAREEK-Air is not published yet)
 constexpr bool kAirFeatures = TAREEK_AIR;
 }
 
@@ -389,7 +389,7 @@ void MainWindow::setupActions() {
     // Height bands, filled for each run (populateAltitudeBandMenu)
     altitudeBandMenu_ = new QMenu("Altitude &Band", this);
 
-    // tareek-air events
+    // TAREEK-Air events
     showLossesAction_ = new QAction("Show Lo&sses", this);
     showLossesAction_->setCheckable(true);
     showLossesAction_->setChecked(true);

@@ -345,7 +345,7 @@ int cmdStats(const QString& scenarioDir) {
     for (const auto& [name, count] : byType)
         types[name] = qint64(count);
 
-    // Height range of the nodes and the air links (tareek-air output)
+    // Height range of the nodes and the air links (TAREEK-Air output)
     double zMin = 0.0, zMax = 0.0;
     if (!network->allNodes().empty()) {
         zMin = zMax = network->allNodes().front().z;
@@ -358,7 +358,7 @@ int cmdStats(const QString& scenarioDir) {
     for (const auto& link : network->allLinks())
         if (simvis::isAirRoadType(static_cast<simvis::RoadType>(link.roadType))) ++airLinks;
 
-    // Air overlay events (tareek-air): count by kind, and holds with a place
+    // Air overlay events (TAREEK-Air): count by kind, and holds with a place
     qint64 losses = 0, groundHolds = 0, airHolds = 0, placedHolds = 0;
     for (const auto& ev : vehicles->overlayEvents()) {
         switch (static_cast<simvis::OverlayKind>(ev.kind)) {

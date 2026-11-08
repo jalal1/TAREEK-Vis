@@ -1,6 +1,6 @@
 # Air traffic
 
-TAREEK-Vis shows aircraft (air taxis and drones) from the tareek-air
+TAREEK-Vis shows aircraft (air taxis and drones) from the TAREEK-Air
 simulator. A run can have only aircraft, or ground traffic and aircraft
 together. The **Air** tab shows only when the run has aircraft.
 
@@ -56,7 +56,7 @@ Air links show the flight paths. Their color shows the phase of flight:
 
 ## See losses and holds
 
-tareek-air writes events for losses of separation and for holds. TAREEK-Vis
+TAREEK-Air writes events for losses of separation and for holds. TAREEK-Vis
 shows them while they last:
 
 | Mark | Shows |
@@ -92,7 +92,7 @@ A vehicle is an aircraft when:
 
 A node can have a height `z`, in metres above the region datum. A link with
 the type attribute `air_vertical`, `air_climb`, `air_cruise`, `air_descent` or
-`air_hover` is an air link. The tareek-air simulator writes such networks.
+`air_hover` is an air link. The TAREEK-Air simulator writes such networks.
 
 ```xml
 <node id="uam_n1" x="481200.0" y="4997300.0" z="450.0" />

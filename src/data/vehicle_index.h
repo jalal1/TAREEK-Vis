@@ -73,7 +73,7 @@ constexpr TimeMs   ACT_NO_TIME = 0xFFFFFFFF;
 // Set when x/y were absent from the event and we fell back to link geometry.
 constexpr uint16_t ACT_FLAG_DERIVED_COORD = 1 << 0;
 
-// An interval from the tareek-air custom events, for the air overlays
+// An interval from the TAREEK-Air custom events, for the air overlays
 // (docs/air-and-modes-plan.md, VIS-4): a loss of separation between two
 // aircraft, or a hold at a vertiport.
 enum class OverlayKind : uint8_t {

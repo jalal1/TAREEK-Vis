@@ -153,7 +153,7 @@ EventParser::StreamResult EventParser::streamProcessEvents(
         std::vector<PersonState> personStates;
         auto& vidx = result.vehicleIndex;          // trip data goes straight into the index
 
-        // Open loss and hold intervals (tareek-air), by vehicle pair or by
+        // Open loss and hold intervals (TAREEK-Air), by vehicle pair or by
         // vehicle, as indices into vidx.overlayEvents_
         std::unordered_map<uint64_t, size_t> openLosses;
         std::unordered_map<uint32_t, size_t> openHolds;
@@ -414,7 +414,7 @@ EventParser::StreamResult EventParser::streamProcessEvents(
                     // nothing to record here.
                     continue;
 
-                // tareek-air: losses of separation and holds. The position of a
+                // TAREEK-Air: losses of separation and holds. The position of a
                 // hold (its vertiport) is set by the preprocessor from the
                 // flight, because the event names the vertiport only by id.
                 case EventType::UamLosStart:

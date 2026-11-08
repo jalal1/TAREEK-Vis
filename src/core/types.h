@@ -110,14 +110,14 @@ enum class RoadType : uint8_t {
     Residential,
     Service,
     Other,
-    // Air links (tareek-air writes the link type air_*). Kept after the road
+    // Air links (TAREEK-Air writes the link type air_*). Kept after the road
     // types, so that "is air" is one comparison.
     AirVertical,          // same x, y at both ends: take-off and landing
     AirClimb,
     AirCruise,
     AirDescent,
     AirHover,             // same x, y and z at both ends: a hold in place
-    AirOther              // any other air_* type, for example air_sentinel (older tareek-air output)
+    AirOther              // any other air_* type, for example air_sentinel (older TAREEK-Air output)
 };
 
 RoadType parseRoadType(const std::string& type);
@@ -166,7 +166,7 @@ enum class EventType : uint8_t {
     Departure,           // MATSim "departure": person, link, legMode
     Arrival,             // MATSim "arrival": person, link, legMode
     TransitDriverStarts, // MATSim "TransitDriverStarts": driverId, vehicleId, transitLineId, transitRouteId
-    // tareek-air custom events
+    // TAREEK-Air custom events
     UamLosStart,         // vehicle, vehicle2, zone, min_horizontal_m
     UamLosEnd,           // vehicle, vehicle2
     UamGroundHold,       // vehicle, duration_s, vertiport

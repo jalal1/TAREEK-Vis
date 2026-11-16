@@ -13,6 +13,7 @@
 #include "core/config.h"
 #include "core/logger.h"
 #include "core/update_checker.h"
+#include "parsers/config_crs.h"
 #include "analysis/nkde_scatter.h"
 
 #include <QtConcurrent/QtConcurrent>
@@ -545,8 +546,11 @@ void MainWindow::setupActions() {
     connect(showBackgroundMapAction_, &QAction::toggled, this, [this](bool checked) {
         if (checked && !networkCrs_.isValid()) {
             QMessageBox::warning(this, "Background Map",
-                "CRS not detected from network file.\n"
-                "Background map requires a known coordinate reference system.");
+                "No coordinate reference system (CRS) found.\n\n"
+                "The background map needs the CRS of the network. TAREEK-Vis "
+                "looks for it in the network file (the coordinateReferenceSystem "
+                "attribute), then in the MATSim config file (output_config.xml "
+                "or config.xml) in the folder of the network.");
             showBackgroundMapAction_->setChecked(false);
             return;
         }
@@ -1495,6 +1499,23 @@ void MainWindow::updateSidePanelActions() {
     showViewsAction_->setChecked(shown && page == viewsPage_);
 }
 
+void MainWindow::useRunConfigCrs() {
+    if (networkCrs_.isValid()) return;
+    std::string source;
+    const std::string crsStr = findCrsInRunConfig(
+        QFileInfo(networkFilePath_).absolutePath().toStdString(), &source);
+    if (crsStr.empty()) {
+        LOG_INFO("No CRS in the network file or the run config");
+        return;
+    }
+    networkCrs_ = parseCRS(crsStr);
+    if (networkCrs_.isValid()) {
+        mapWidget_->setCRS(networkCrs_);
+        LOG_INFO(QString("CRS %1 from %2").arg(QString::fromStdString(crsStr),
+                                              QString::fromStdString(source)));
+    }
+}
+
 void MainWindow::checkBackgroundMapCrs() {
     if (showBackgroundMapAction_->isChecked() && !networkCrs_.isValid()) {
         showBackgroundMapAction_->setChecked(false);
@@ -1641,6 +1662,7 @@ void MainWindow::startPreprocessing() {
                     crsFile.close();
                 }
             }
+            useRunConfigCrs();
             checkBackgroundMapCrs();
             // Take transit data from preprocessor before it's destroyed
             if (preprocessor_->transitResult()) {
@@ -1863,6 +1885,7 @@ void MainWindow::applyLoadedFiles(LoadedFiles& files, bool fromCache, const QStr
     // schedule was read with the other files
     if (fromCache) {
         loadCachedCRS(cacheDirectory_ + "/network.crs");
+        useRunConfigCrs();
         checkBackgroundMapCrs();
         if (files.transit) {
             if (files.transit->success) {

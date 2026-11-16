@@ -46,8 +46,11 @@ this attribute are gray.
    **Satellite (ESRI)** or **Topo Map**.
 
 - The background map needs the coordinate reference system (CRS) of the
-  network. The network file must have a `coordinateReferenceSystem`
-  attribute, for example `EPSG:26915`.
+  network, for example `EPSG:26915`. TAREEK-Vis finds the CRS in the
+  `coordinateReferenceSystem` attribute of the network file. If the network
+  file has no CRS, TAREEK-Vis uses the `coordinateSystem` parameter of the
+  MATSim config file (`output_config.xml` or `config.xml`) in the folder of
+  the network.
 - The map tiles come from the internet. TAREEK-Vis keeps up to 300 MB of
   tiles in `%LOCALAPPDATA%\TAREEK-Vis\TAREEK-Vis\cache\tiles`. Areas that you saw before
   load fast, also after a restart.

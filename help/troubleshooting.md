@@ -9,9 +9,12 @@ different folders, use **Home > Open Files**. See
 
 ## The background map does not show
 
-- If TAREEK-Vis says "CRS not detected", the network file has no
-  `coordinateReferenceSystem` attribute. Add it, then click
-  **Home > Rebuild Cache**.
+- If TAREEK-Vis says "No coordinate reference system (CRS) found", the
+  network file has no `coordinateReferenceSystem` attribute, and no MATSim
+  config file in the folder of the network has a `coordinateSystem`
+  parameter. Put the `output_config.xml` of the run in the folder of the
+  network, then open the run again. Or add the attribute to the network file,
+  then click **Home > Rebuild Cache**.
 - The tiles come from the internet. Make sure that the computer is
   connected.
 

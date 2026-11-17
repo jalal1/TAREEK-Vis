@@ -13,8 +13,8 @@
 #include "core/config.h"
 #include "core/logger.h"
 #include "core/update_checker.h"
-#include "parsers/config_crs.h"
 #include "analysis/nkde_scatter.h"
+#include "analysis/link_metrics.h"
 
 #include <QtConcurrent/QtConcurrent>
 #include <QFutureWatcher>
@@ -232,16 +232,29 @@ void MainWindow::setupUi() {
     // The volume scan runs while the user is already clicking around, so when
     // it lands, refresh a link panel that was opened before the numbers existed
     // - otherwise it keeps saying the link has no traffic.
-    connect(&volumeWatcher_, &QFutureWatcher<LinkHourlyVolumes>::finished,
+    connect(&volumeWatcher_, &QFutureWatcher<LinkTableResult>::finished,
             this, [this]() {
-        LinkHourlyVolumes result = volumeWatcher_.result();
+        LinkTableResult result = volumeWatcher_.result();
         if (result.generation != volumeGeneration_) {
-            LOG_INFO("Discarding volume scan from a superseded scenario.");
+            LOG_INFO("Discarding link table from a superseded scenario.");
             return;
         }
-        linkHourlyVolumes_ = std::move(result);
-        linkHourlyVolumesReady_ = true;
-        LOG_INFO("Background volume aggregation completed.");
+        linkTableRunning_ = false;
+        if (!result.table) {
+            LOG_ERROR("Link table: " + result.error);
+            return;
+        }
+        linkTable_ = result.table;
+        LOG_INFO(QString("Link table %1 in %2 s (%3 bins of %4 s, %5 entries, %6 MB); "
+                         "robust maxima in %7 s")
+                     .arg(result.fromCache ? "read" : "built")
+                     .arg(result.tableSeconds, 0, 'f', 3)
+                     .arg(linkTable_->binCount()).arg(linkTable_->binSeconds())
+                     .arg(linkTable_->entryCount())
+                     .arg(linkTable_->memoryBytes() / 1048576.0, 0, 'f', 1)
+                     .arg(result.robustSeconds, 0, 'f', 3));
+        mapWidget_->setLinkTimeTable(linkTable_, runFactors(), result.robustMax);
+        for (QAction* a : linkResultActions_) a->setEnabled(true);
 
         if (selectedLinkId_ != kNoLink) {
             onNetworkLinkClicked(selectedLinkId_);
@@ -460,7 +473,7 @@ void MainWindow::setupActions() {
     vehicleColorMenu_ = new QMenu("Vehicle &Color", this);
     auto* colorGroup = new QActionGroup(this);
 
-    vehicleColorSpeedAction_ = vehicleColorMenu_->addAction("By &Speed");
+    vehicleColorSpeedAction_ = vehicleColorMenu_->addAction("By &Vehicle Speed");
     vehicleColorSpeedAction_->setCheckable(true);
     vehicleColorSpeedAction_->setChecked(true);  // Default
     vehicleColorSpeedAction_->setActionGroup(colorGroup);
@@ -470,6 +483,91 @@ void MainWindow::setupActions() {
     vehicleColorModeAction_->setCheckable(true);
     vehicleColorModeAction_->setActionGroup(colorGroup);
     connect(vehicleColorModeAction_, &QAction::triggered, this, &MainWindow::onVehicleColorMode);
+
+    // Link color modes (roadmap item 9), one entry per metric of
+    // analysis/link_metrics.h. Road Type is the default.
+    linkColorMenu_ = new QMenu("Color &By", this);
+    auto* linkColorGroup = new QActionGroup(this);
+    bool resultSection = false;
+    linkColorMenu_->addSection(tr("Links"));
+    for (const linkmetrics::Metric& metric : linkmetrics::metrics()) {
+        if (metric.mode == linkmetrics::Mode::Capacity) linkColorMenu_->addSection(tr("Links: Network"));
+        if (metric.timeDependent && !resultSection) {
+            linkColorMenu_->addSection(tr("Links: Simulation Results"));
+            resultSection = true;
+        }
+        QAction* action = linkColorMenu_->addAction(QString::fromUtf8(metric.name));
+        action->setCheckable(true);
+        action->setChecked(metric.mode == linkmetrics::Mode::RoadType);
+        action->setActionGroup(linkColorGroup);
+        action->setStatusTip(QString::fromUtf8(metric.description));
+        // A result mode needs the link table, which is made after the load
+        if (metric.timeDependent) {
+            action->setEnabled(false);
+            linkResultActions_ << action;
+        }
+        const linkmetrics::Mode mode = metric.mode;
+        const bool scaled = metric.sampleScaled;
+        connect(action, &QAction::triggered, this, [this, mode, scaled]() {
+            // A mode scaled to the full population needs the sample scale.
+            // Ask one time per run; after a cancel, the values stay those of
+            // the sample (the legend says so).
+            if (scaled && sampleScale_ <= 0.0 && !sampleScaleAsked_) askSampleScale();
+            mapWidget_->setLinkColorMode(mode);
+        });
+    }
+    sampleScaleAction_ = linkColorMenu_->addAction(tr("Sample Scale..."));
+    sampleScaleAction_->setStatusTip(tr("The sample scale of this run (10 for a 10 % sample)"));
+    connect(sampleScaleAction_, &QAction::triggered, this, [this]() { askSampleScale(); });
+
+    // The time window of the result modes: the bin of the current time (the
+    // colors follow the timeline), or a fixed window
+    linkTimeMenu_ = new QMenu("Link &Time", this);
+    auto* linkTimeGroup = new QActionGroup(this);
+    struct Window { const char* text; double from; double to; };
+    const Window windows[] = {
+        {"Current Time (15 min)", -1.0, -1.0},
+        {"Morning Peak (07:00 to 09:00)", 7 * 3600.0, 9 * 3600.0},
+        {"Evening Peak (16:00 to 18:00)", 16 * 3600.0, 18 * 3600.0},
+        {"Whole Day (00:00 to 24:00)", 0.0, 24 * 3600.0},
+    };
+    for (const Window& w : windows) {
+        QAction* action = linkTimeMenu_->addAction(tr(w.text));
+        action->setCheckable(true);
+        action->setChecked(w.from < 0.0);
+        action->setActionGroup(linkTimeGroup);
+        const double from = w.from, to = w.to;
+        connect(action, &QAction::triggered, this, [this, from, to]() {
+            mapWidget_->setLinkTimeWindow(from, to);
+        });
+    }
+    // Not checkable: a saved view replays the checked actions, and this one
+    // asks for input. While a custom window is on, no preset is checked.
+    linkTimeGroup->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
+    linkTimeMenu_->addSeparator();
+    QAction* customWindow = linkTimeMenu_->addAction(tr("Custom Window..."));
+    connect(customWindow, &QAction::triggered, this, [this, linkTimeGroup]() {
+        bool ok = false;
+        const QString text = QInputDialog::getText(
+            this, tr("Link Time Window"),
+            tr("Time window of the link colors (HH:MM to HH:MM, for example 06:30 to 09:15):"),
+            QLineEdit::Normal, lastLinkWindowText_, &ok);
+        if (!ok) return;
+        static const QRegularExpression re(
+            QStringLiteral("^\\s*(\\d{1,2}):(\\d{2})\\s*(?:to|-)\\s*(\\d{1,2}):(\\d{2})\\s*$"));
+        const auto m = re.match(text);
+        const double from = m.hasMatch() ? m.captured(1).toInt() * 3600.0 + m.captured(2).toInt() * 60.0 : -1.0;
+        const double to = m.hasMatch() ? m.captured(3).toInt() * 3600.0 + m.captured(4).toInt() * 60.0 : -1.0;
+        if (!m.hasMatch() || to <= from) {
+            QMessageBox::warning(this, tr("Link Time Window"),
+                                 tr("Type two times, the first one before the second, "
+                                    "for example 06:30 to 09:15."));
+            return;
+        }
+        lastLinkWindowText_ = text;
+        if (QAction* checked = linkTimeGroup->checkedAction()) checked->setChecked(false);
+        mapWidget_->setLinkTimeWindow(from, to);
+    });
 
     // --- Transit section ---
     // All transit layers start hidden; users enable what they need
@@ -544,13 +642,9 @@ void MainWindow::setupActions() {
     showBackgroundMapAction_->setCheckable(true);
     showBackgroundMapAction_->setChecked(false);
     connect(showBackgroundMapAction_, &QAction::toggled, this, [this](bool checked) {
-        if (checked && !networkCrs_.isValid()) {
-            QMessageBox::warning(this, "Background Map",
-                "No coordinate reference system (CRS) found.\n\n"
-                "The background map needs the CRS of the network. TAREEK-Vis "
-                "looks for it in the network file (the coordinateReferenceSystem "
-                "attribute), then in the MATSim config file (output_config.xml "
-                "or config.xml) in the folder of the network.");
+        // The network file has no CRS: ask for it (TAREEK-Vis reads no
+        // MATSim config file)
+        if (checked && !networkCrs_.isValid() && !askForCrs()) {
             showBackgroundMapAction_->setChecked(false);
             return;
         }
@@ -821,7 +915,21 @@ void MainWindow::setupRibbon() {
     auto* vehicleStyle = view->addGroup("Vehicle Style");
     vehicleStyle->addSmallAction(vehicleShapeMenu_->menuAction());
     vehicleStyle->addSmallAction(vehicleSizeMenu_->menuAction());
-    vehicleStyle->addSmallAction(vehicleColorMenu_->menuAction());
+
+    linkColorMenu_->menuAction()->setIcon(ribbonIcon("paint-bucket"));
+    linkColorMenu_->menuAction()->setIconText("Color\nby");
+    linkColorMenu_->menuAction()->setToolTip(tr("Color the road links and the vehicles"));
+    // The vehicle colors are in the same menu (the same actions as in
+    // vehicleColorMenu_, so their action group and slots stay)
+    linkColorMenu_->addSection(tr("Vehicles"));
+    linkColorMenu_->addAction(vehicleColorSpeedAction_);
+    linkColorMenu_->addAction(vehicleColorModeAction_);
+    linkTimeMenu_->menuAction()->setIcon(ribbonIcon("clock"));
+    linkTimeMenu_->menuAction()->setIconText("Time");
+    linkTimeMenu_->menuAction()->setToolTip(tr("The time window of the result colors"));
+    auto* linksGroup = view->addGroup("Links");
+    linksGroup->addLargeAction(linkColorMenu_->menuAction());
+    linksGroup->addLargeAction(linkTimeMenu_->menuAction());
 
     auto* backgroundMap = view->addGroup("Background Map");
     backgroundMap->addLargeAction(showBackgroundMapAction_);
@@ -1499,21 +1607,91 @@ void MainWindow::updateSidePanelActions() {
     showViewsAction_->setChecked(shown && page == viewsPage_);
 }
 
-void MainWindow::useRunConfigCrs() {
-    if (networkCrs_.isValid()) return;
-    std::string source;
-    const std::string crsStr = findCrsInRunConfig(
-        QFileInfo(networkFilePath_).absolutePath().toStdString(), &source);
-    if (crsStr.empty()) {
-        LOG_INFO("No CRS in the network file or the run config");
-        return;
+linkmetrics::RunFactors MainWindow::runFactors() const {
+    linkmetrics::RunFactors f;
+    f.capPeriodS = networkIndex_ ? networkIndex_->capPeriodS() : 0;
+    if (sampleScale_ > 0.0) {
+        f.scale = sampleScale_;
+        f.scaleSource = "sample scale entered for this run";
     }
-    networkCrs_ = parseCRS(crsStr);
-    if (networkCrs_.isValid()) {
-        mapWidget_->setCRS(networkCrs_);
-        LOG_INFO(QString("CRS %1 from %2").arg(QString::fromStdString(crsStr),
-                                              QString::fromStdString(source)));
+    return f;
+}
+
+QString MainWindow::sampleScalePath() const {
+    return cacheDirectory_ + "/sample_scale.txt";
+}
+
+void MainWindow::readSampleScale() {
+    // The sample scale of this run, as the user entered it before. TAREEK-Vis
+    // reads no MATSim config file: the user says what the outputs cannot.
+    sampleScale_ = 0.0;
+    sampleScaleAsked_ = false;
+    QFile file(sampleScalePath());
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        bool ok = false;
+        const double v = QString::fromUtf8(file.readAll()).trimmed().toDouble(&ok);
+        if (ok && v > 0.0) sampleScale_ = v;
     }
+}
+
+void MainWindow::setSampleScale(double scale, bool save) {
+    sampleScale_ = scale;
+    if (save && !captureMode_) {
+        QFile file(sampleScalePath());
+        if (file.open(QIODevice::WriteOnly | QIODevice::Text))
+            file.write(QByteArray::number(scale, 'g', 10));
+    }
+    LOG_INFO(QString("Sample scale %1").arg(scale));
+    mapWidget_->setRunFactors(runFactors());
+    if (selectedLinkId_ != kNoLink) onNetworkLinkClicked(selectedLinkId_);
+}
+
+bool MainWindow::askSampleScale() {
+    if (captureMode_) return false;
+    sampleScaleAsked_ = true;
+    bool ok = false;
+    const double scale = QInputDialog::getDouble(
+        this, tr("Sample Scale"),
+        tr("A MATSim run usually simulates a sample of the persons, for example\n"
+           "10 %. TAREEK-Vis multiplies the flow, density, volume / capacity and\n"
+           "delayed vehicles by this factor to show the full population.\n\n"
+           "Type the scale of this run, for example 10 for a 10 % sample\n"
+           "(1 / flowCapacityFactor, or countsScaleFactor, of the run).\n"
+           "Load Counts uses the same value.\n\n"
+           "Sample scale:"),
+        sampleScale_ > 0.0 ? sampleScale_ : 1.0, 0.001, 100000.0, 3, &ok);
+    if (!ok) return false;
+    setSampleScale(scale, true);
+    return true;
+}
+
+bool MainWindow::askForCrs() {
+    if (captureMode_) return false;
+    bool ok = false;
+    const QString text = QInputDialog::getText(
+        this, tr("Coordinate Reference System"),
+        tr("The network file has no coordinate reference system (CRS), and the\n"
+           "background map needs it.\n\n"
+           "Type the EPSG code of the network coordinates, for example\n"
+           "EPSG:26915 (UTM zone 15N, Minneapolis):"),
+        QLineEdit::Normal, QStringLiteral("EPSG:"), &ok).trimmed();
+    if (!ok || text.isEmpty()) return false;
+    const QString code = text.startsWith(QLatin1String("EPSG:"), Qt::CaseInsensitive)
+                             ? text : QStringLiteral("EPSG:") + text;
+    const CRSInfo crs = parseCRS(code.toUpper().toStdString());
+    if (!crs.isValid()) {
+        QMessageBox::warning(this, tr("Coordinate Reference System"),
+                             tr("TAREEK-Vis does not know %1.").arg(code));
+        return false;
+    }
+    networkCrs_ = crs;
+    mapWidget_->setCRS(networkCrs_);
+    // The same sidecar file as a CRS from the network file, so it is used
+    // again the next time the run opens
+    QFile crsFile(cacheDirectory_ + "/network.crs");
+    if (crsFile.open(QIODevice::WriteOnly | QIODevice::Text)) crsFile.write(code.toUpper().toUtf8());
+    LOG_INFO("CRS entered by the user: " + code);
+    return true;
 }
 
 void MainWindow::checkBackgroundMapCrs() {
@@ -1596,11 +1774,14 @@ void MainWindow::loadFromPaths(const QString& networkPath, const QString& events
                 .arg(vidxVersion).arg(VIDX_FILE_VERSION));
         }
         // The same for the network: readBinaryHeader gives an empty header
-        // for a file of another version
+        // for a file of another version. The .vidx is still valid then (the
+        // link ids come from the order in the network XML), so only the .bin
+        // is made again, when the run loads.
+        networkBinOutdated_ = false;
         if (cacheValid &&
             NetworkParser::readBinaryHeader(networkBin.toStdString()).magic != NETWORK_FILE_MAGIC) {
-            cacheValid = false;
-            LOG_INFO("Cache .bin is of an older version - will re-preprocess");
+            networkBinOutdated_ = true;
+            LOG_INFO("Cache .bin is of an older version - will rebuild the network .bin only");
         }
 
         LOG_INFO(QString("Cache check: bin=%1 vidx=%2 valid=%3")
@@ -1662,7 +1843,6 @@ void MainWindow::startPreprocessing() {
                     crsFile.close();
                 }
             }
-            useRunConfigCrs();
             checkBackgroundMapCrs();
             // Take transit data from preprocessor before it's destroyed
             if (preprocessor_->transitResult()) {
@@ -1720,6 +1900,10 @@ void MainWindow::loadBinaryFiles(bool fromCache) {
     // From the cache, the transit schedule is read here too (it is not
     // cached). After preprocessing, the preprocessor has read it already.
     const QString transitPath = fromCache ? transitSchedulePath_ : QString();
+    // Set by the cache check: the .bin is of an older format
+    const QString rebuildNetworkFrom =
+        fromCache && networkBinOutdated_ ? networkFilePath_ : QString();
+    networkBinOutdated_ = false;
 
     // Internal link ids mean nothing in the network about to load. Keep the
     // inspected link by its MATSim id, so the same road opens in this run, and
@@ -1759,8 +1943,16 @@ void MainWindow::loadBinaryFiles(bool fromCache) {
     });
 
     watcher->setFuture(QtConcurrent::run(
-        [networkBin, vidxPath, transitPath, step, uiThread]() {
+        [networkBin, vidxPath, transitPath, rebuildNetworkFrom, step, uiThread]() {
             auto files = std::make_shared<LoadedFiles>();
+
+            if (!rebuildNetworkFrom.isEmpty()) {
+                step(QObject::tr("Updating the network cache..."));
+                if (!Preprocessor::rebuildNetworkBinary(rebuildNetworkFrom, networkBin)) {
+                    files->error = "Failed to update the network cache file.";
+                    return files;
+                }
+            }
 
             auto network = std::make_shared<NetworkIndex>();
             if (!network->loadFile(networkBin)) {
@@ -1863,9 +2055,11 @@ void MainWindow::applyLoadedFiles(LoadedFiles& files, bool fromCache, const QStr
     // Fit view to network
     mapWidget_->fitToNetwork();
 
-    // Hourly link volumes for the info panel, on a worker thread. The scan
-    // touches every segment in the scenario, so it must not block the load.
-    if (!captureMode_) startVolumeAggregation();
+    // The per-link time table (link colors, hourly volumes), on a worker
+    // thread: it reads the cache file, or makes it from every segment. A
+    // scene capture runs it too and waits for it before the first scene, so
+    // the timed frames do not share the CPU with it.
+    startVolumeAggregation();
 
     // After the scan has started, so the panel waits for this run's volumes
     // rather than showing the last run's.
@@ -1885,7 +2079,6 @@ void MainWindow::applyLoadedFiles(LoadedFiles& files, bool fromCache, const QStr
     // schedule was read with the other files
     if (fromCache) {
         loadCachedCRS(cacheDirectory_ + "/network.crs");
-        useRunConfigCrs();
         checkBackgroundMapCrs();
         if (files.transit) {
             if (files.transit->success) {
@@ -1956,47 +2149,66 @@ void MainWindow::populateAltitudeBandMenu() {
 }
 
 void MainWindow::startVolumeAggregation() {
-    // Any scan still running describes the previous scenario. Let it finish
-    // into a result nobody reads rather than blocking the load on it; the
-    // generation stamp tells us which scenario a result belongs to.
+    // Any job still running describes the previous run. Let it finish into a
+    // result nobody reads rather than blocking the load on it; the generation
+    // stamp tells us which run a result belongs to.
     const uint64_t generation = ++volumeGeneration_;
+    linkTable_.reset();
+    mapWidget_->setLinkTimeTable(nullptr, {}, {});
+    for (QAction* a : linkResultActions_) a->setEnabled(false);
 
-    linkHourlyVolumes_ = LinkHourlyVolumes{};
-    linkHourlyVolumesReady_ = false;
-
-    // The worker holds its own reference to the index, so a second load
-    // swapping vehicleIndex_ cannot pull the data out from under a live scan.
+    // The worker holds its own references, so a second load cannot pull the
+    // data out from under it
     std::shared_ptr<const VehicleIndex> index = vehicleIndex_;
-    const size_t linkCount = networkIndex_ ? networkIndex_->linkCount() : 0;
+    std::shared_ptr<const NetworkIndex> network = networkIndex_;
+    if (!index || !network) return;
+    linkTableRunning_ = true;
 
-    QFuture<LinkHourlyVolumes> future =
-        QtConcurrent::run([index, linkCount, generation]() {
-            LinkHourlyVolumes result;
+    // The sample scale that the user entered for this run before (or none)
+    readSampleScale();
+
+    QString eventsBase = QFileInfo(eventsFilePath_).completeBaseName();
+    if (eventsBase.endsWith(".xml")) eventsBase.chop(4);
+    const QString vidxPath = cacheDirectory_ + "/" + eventsBase + ".vidx";
+    const QString tablePath = cacheDirectory_ + "/" + eventsBase + ".linkbins";
+    // The robust maxima are of the sample values (scale 1). The map
+    // multiplies them by the sample scale, which the user can change.
+    linkmetrics::RunFactors factors = runFactors();
+    factors.scale = 0.0;
+
+    QFuture<LinkTableResult> future =
+        QtConcurrent::run([index, network, generation, vidxPath, tablePath, factors]() {
+            LinkTableResult result;
             result.generation = generation;
-            if (!index || linkCount == 0) return result;
+            const auto& links = network->allLinks();
 
-            // Link ids are interned sequentially from 0, so they index this
-            // array directly: one allocation instead of one per link, and no
-            // hash lookup per segment. On an 8.2M-segment scenario this is
-            // ~130ms against ~1.2s for a hash map of per-link vectors.
-            result.hours.assign(linkCount * 24, 0);
+            LinkTimeTable::Source source;
+            const QFileInfo vidx(vidxPath);
+            source.vidxBytes = static_cast<uint64_t>(vidx.size());
+            source.vidxModifiedMs = vidx.lastModified().toMSecsSinceEpoch();
+            source.vidxVersion = VehicleIndex::fileVersion(vidxPath);
+            source.networkHash = LinkTimeTable::networkHash(links);
 
-            const size_t vehicles = index->vehicleCount();
-            for (size_t v = 0; v < vehicles; ++v) {
-                const auto* traj = index->trajectory(static_cast<uint32_t>(v));
-                if (!traj) continue;
-
-                for (const auto& seg : traj->segments) {
-                    if (seg.linkId >= linkCount) continue;
-
-                    // MATSim counts seconds from midnight and routinely runs
-                    // past 24:00 - scenarios here end near hour 26 - so fold
-                    // back to hour of day. Truncating at 23 silently dropped
-                    // every trip after midnight instead of counting it.
-                    const uint32_t hour = (seg.enterTime / 3600000u) % 24u;
-                    result.hours[static_cast<size_t>(seg.linkId) * 24 + hour]++;
-                }
+            QElapsedTimer timer;
+            timer.start();
+            auto table = std::make_shared<LinkTimeTable>();
+            if (table->load(tablePath.toStdString(), source)) {
+                result.fromCache = true;
+            } else {
+                // 15-minute bins (docs/link-colors.md, decision 1)
+                *table = LinkTimeTable::build(*index, links, 900);
+                if (!table->save(tablePath.toStdString(), source))
+                    LOG_WARN("Link table: cannot write " + tablePath);
             }
+            result.tableSeconds = timer.nsecsElapsed() / 1e9;
+
+            timer.start();
+            for (const auto& m : linkmetrics::metrics()) {
+                if (m.scale == linkmetrics::Scale::RobustMax)
+                    result.robustMax[m.mode] = linkmetrics::robustMax(m.mode, *table, links, factors);
+            }
+            result.robustSeconds = timer.nsecsElapsed() / 1e9;
+            result.table = std::move(table);
             return result;
         });
     volumeWatcher_.setFuture(future);
@@ -3094,8 +3306,10 @@ void MainWindow::onLoadCounts() {
 
     if (countsPath.isEmpty()) return;
 
-    // Ask user for countsScaleFactor
+    // The sample scale of the run: the same value as for the link colors
+    // (Color By > Sample Scale...), filled in when it is known
     bool ok = false;
+    const double suggested = sampleScale_ > 0.0 ? sampleScale_ : 1.0;
     double scaleFactor = QInputDialog::getDouble(
         this,
         "Counts Scale Factor",
@@ -3104,8 +3318,9 @@ void MainWindow::onLoadCounts() {
         "The simulated events may represent a scaled sample of\n"
         "the full population. Simulated volumes will be multiplied\n"
         "by this factor to match the real scale.\n\n"
+        "The link colors use the same value (Color By > Sample Scale...).\n\n"
         "countsScaleFactor:",
-        1.0,    // default
+        suggested,  // default
         0.001,  // min
         10000,  // max
         3,      // decimals
@@ -3146,6 +3361,9 @@ bool MainWindow::loadCounts(const QString& countsPath, double scaleFactor) {
     // reports raw event counts, and this is the only place the app learns what
     // fraction of the population they represent.
     countsScaleFactor_ = scaleFactor;
+    // One sample scale for the run: the counts value is also the scale of
+    // the link colors and charts
+    if (std::abs(sampleScale_ - scaleFactor) > 1e-12) setSampleScale(scaleFactor, true);
 
     // Compute simulated volumes from vehicle index
     statusLabel_->setText("Computing simulated volumes...");
@@ -3261,7 +3479,7 @@ void MainWindow::onNetworkLinkClicked(uint32_t linkId) {
     info.lengthM = link->length;
     info.freeSpeedMs = link->freespeed;
     info.capacityVehH = link->capacity;
-    info.lanes = link->lanes;
+    info.lanes = link->lanes();
     info.roadType = roadTypeName(static_cast<RoadType>(link->roadType));
 
     // Attach count-station info if counts are loaded for this link
@@ -3276,12 +3494,24 @@ void MainWindow::onNetworkLinkClicked(uint32_t linkId) {
     // Until the scan finishes, leave hourlyVolumes empty: the panel then omits
     // the chart entirely rather than drawing 24 zeros, which would read as "no
     // traffic on this link" when the truth is "not counted yet".
-    info.volumeScaleFactor = countsScaleFactor_;
+    // The hourly volumes use the scale of the run config, as the link colors
+    // do. Without one, the counts scale (if counts are loaded) still counts.
+    info.volumeScaleFactor = sampleScale_;
+    info.volumeScaleSource = QStringLiteral("sample scale entered for this run");
 
-    const size_t base = static_cast<size_t>(linkId) * 24;
-    if (linkHourlyVolumesReady_ && base + 24 <= linkHourlyVolumes_.hours.size()) {
-        const auto begin = linkHourlyVolumes_.hours.begin() + base;
-        info.hourlyVolumes.assign(begin, begin + 24);
+    // From the link table: the sums of each bin, and the hourly volumes as
+    // the sum of the bins of each hour, over the whole run (not folded at
+    // 24:00), so the chart agrees with the link colors
+    if (linkTable_ && linkId < linkTable_->linkCount()) {
+        info.binSums = linkTable_->linkSeries(linkId);
+        info.binSeconds = linkTable_->binSeconds();
+        info.runFactors = runFactors();
+        info.link = *link;
+        const uint32_t binsPerHour = std::max<uint32_t>(1, 3600 / info.binSeconds);
+        const size_t hours = (info.binSums.size() + binsPerHour - 1) / binsPerHour;
+        info.hourlyVolumes.assign(std::max<size_t>(hours, 24), 0);
+        for (size_t b = 0; b < info.binSums.size(); ++b)
+            info.hourlyVolumes[b / binsPerHour] += info.binSums[b].enters;
     }
 
     infoPanel_->showLinkInfo(info);
@@ -3309,6 +3539,14 @@ ScenarioPanel::LinkRow MainWindow::scenarioRow(uint32_t linkId) const {
         row.lengthM = link->length;
     }
     return row;
+}
+
+QString MainWindow::currentToggleKey(const QString& key) {
+    // Names that changed: a saved view or a scene file of an older version
+    // keeps working
+    if (key == QLatin1String("By Speed")) return QStringLiteral("By Vehicle Speed");
+    if (key == QLatin1String("Queue")) return QStringLiteral("Delayed Vehicles");
+    return key;
 }
 
 QString MainWindow::toggleKey(const QAction* action) {
@@ -3399,8 +3637,9 @@ void MainWindow::applyView(const QJsonObject& view) {
     const QJsonObject actions = view.value("actions").toObject();
     for (auto it = actions.begin(); it != actions.end(); ++it) {
         QAction* found = nullptr;
+        const QString key = currentToggleKey(it.key());
         for (QAction* action : toggles) {
-            if (toggleKey(action) == it.key()) { found = action; break; }
+            if (toggleKey(action) == key) { found = action; break; }
         }
         if (!found || !found->isEnabled()) continue;
         // trigger() so that the slots on triggered() and on toggled() both run

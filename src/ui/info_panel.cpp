@@ -15,6 +15,7 @@
 #include <QMouseEvent>
 #include <QVariant>
 #include <QRegularExpression>
+#include <QComboBox>
 #include <algorithm>
 #include <cmath>
 
@@ -441,7 +442,7 @@ void InfoPanel::showLinkInfo(const LinkInfo& info) {
     addRow("Free speed", QString("%1 m/s  (%2 km/h)")
         .arg(info.freeSpeedMs, 0, 'f', 1).arg(kmh, 0, 'f', 0));
     addRow("Capacity", QString("%1 veh/h").arg(info.capacityVehH, 0, 'f', 0));
-    addRow("Lanes", QString::number(info.lanes));
+    addRow("Lanes", QString::number(info.lanes, 'g', 3));
     if (!info.roadType.isEmpty() && info.roadType != "Unknown")
         addRow("Road type", info.roadType);
     if (ffSec > 0.0) {
@@ -474,7 +475,7 @@ void InfoPanel::showLinkInfo(const LinkInfo& info) {
         kv(1, "To", info.toNode);
     }
 
-    if (info.hourlyVolumes.size() == 24) {
+    if (!info.hourlyVolumes.empty()) {
         addDivider();
         addHeader("Hourly Volume");
 
@@ -501,8 +502,9 @@ void InfoPanel::showLinkInfo(const LinkInfo& info) {
         // baseline chart and a scenario chart cannot be mixed up.
         QString scaleNote;
         if (scaled)
-            scaleNote = QString("scaled x%1 to full population")
-                            .arg(info.volumeScaleFactor, 0, 'g', 6);
+            scaleNote = QString("scaled x%1 to full population (%2)")
+                            .arg(info.volumeScaleFactor, 0, 'g', 6)
+                            .arg(info.volumeScaleSource);
         else if (rateKnown)
             scaleNote = "full population";
         else
@@ -529,7 +531,77 @@ void InfoPanel::showLinkInfo(const LinkInfo& info) {
         } else if (!rateKnown) {
             addCaption("Simulated vehicles as counted in the events file. "
                        "Not scaled to the full population.");
+        } else if (scaled) {
+            addCaption(QString("Scaled x%1 to the full population (%2).")
+                           .arg(info.volumeScaleFactor, 0, 'g', 6)
+                           .arg(info.volumeScaleSource));
         }
+    }
+
+    // A result metric of the link over the day, per bin of the link table
+    // (the same values as the link colors)
+    if (!info.binSums.empty() && info.binSeconds > 0) {
+        addDivider();
+        addHeader("Metrics Over the Day");
+
+        auto* choice = new QComboBox(contentWidget_);
+        for (const linkmetrics::Metric& m : linkmetrics::metrics()) {
+            if (!m.timeDependent) continue;
+            choice->addItem(QString::fromUtf8(m.name), QString::fromUtf8(m.key));
+        }
+        const int last = choice->findData(lastMetricKey_);
+        choice->setCurrentIndex(last >= 0 ? last : 0);
+        contentLayout_->insertWidget(contentLayout_->count() - 1, choice);
+
+        auto* chart = new HourlyVolumeChart();
+        contentLayout_->insertWidget(contentLayout_->count() - 1, chart);
+        auto* caption = new QLabel(contentWidget_);
+        caption->setWordWrap(true);
+        caption->setStyleSheet("color: gray; font-size: 8pt;");
+        contentLayout_->insertWidget(contentLayout_->count() - 1, caption);
+
+        auto* exportButton = new QPushButton("Export chart...", contentWidget_);
+        exportButton->setCursor(Qt::PointingHandCursor);
+        exportButton->setToolTip("Save this chart as PNG or PDF");
+        connect(exportButton, &QPushButton::clicked, chart, &HourlyVolumeChart::exportChart);
+        contentLayout_->insertWidget(contentLayout_->count() - 1, exportButton);
+
+        const QString exp = info.experimentName.isEmpty() ? QString("unknown run") : info.experimentName;
+        auto showMetric = [this, info, chart, caption, choice, exp]() {
+            const QString key = choice->currentData().toString();
+            lastMetricKey_ = key;
+            const linkmetrics::Metric* m = linkmetrics::metricByKey(key.toStdString());
+            if (!m) return;
+            std::vector<double> values(info.binSums.size());
+            for (size_t b = 0; b < info.binSums.size(); ++b) {
+                const float v = linkmetrics::resultValue(m->mode, info.binSums[b], info.link,
+                                                         info.binSeconds, info.runFactors);
+                values[b] = linkmetrics::isNoData(v) ? std::nan("") : static_cast<double>(v);
+            }
+            const bool ratio = m->mode == linkmetrics::Mode::SpeedRatio ||
+                               m->mode == linkmetrics::Mode::VolumeCapacity;
+            const QString unit = QString::fromUtf8(m->unit);
+            chart->setSeries(values, static_cast<int>(info.binSeconds), unit, ratio ? 2 : 1,
+                             m->mode == linkmetrics::Mode::VolumeCapacity ? 1.0 : 0.0);
+            QString text = QString::fromUtf8(m->description);
+            if (m->sampleScaled) {
+                text += info.runFactors.scale > 0.0
+                    ? QString(" Scaled x%1 to the full population (%2).")
+                          .arg(info.runFactors.scale, 0, 'g', 4)
+                          .arg(QString::fromStdString(info.runFactors.scaleSource))
+                    : QString(" Values of the sample: no sample scale (Color By > Sample Scale...).");
+            }
+            text += QString(" One bar per %1 minutes.").arg(info.binSeconds / 60);
+            caption->setText(text);
+            QString stem = QString("%1_link_%2_%3").arg(exp, info.linkId, key);
+            stem.replace(QRegularExpression("[^A-Za-z0-9_.-]"), "_");
+            chart->setExportInfo(
+                QString("Link %1 - %2%3").arg(info.linkId, QString::fromUtf8(m->name),
+                                              unit.isEmpty() ? QString() : " (" + unit + ")"),
+                exp, stem);
+        };
+        connect(choice, &QComboBox::currentIndexChanged, this, showMetric);
+        showMetric();
     }
 
     if (info.hasCounts) {

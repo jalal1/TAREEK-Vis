@@ -9,12 +9,11 @@ different folders, use **Home > Open Files**. See
 
 ## The background map does not show
 
-- If TAREEK-Vis says "No coordinate reference system (CRS) found", the
-  network file has no `coordinateReferenceSystem` attribute, and no MATSim
-  config file in the folder of the network has a `coordinateSystem`
-  parameter. Put the `output_config.xml` of the run in the folder of the
-  network, then open the run again. Or add the attribute to the network file,
-  then click **Home > Rebuild Cache**.
+- If the network file has no `coordinateReferenceSystem` attribute,
+  TAREEK-Vis asks for the EPSG code when you turn on the background map. Type
+  the code of the network coordinates, for example `EPSG:26915`. If the map
+  is in the wrong place, the code is wrong: delete `network.crs` in the cache
+  folder of the run (`.simvis_cache`) and turn on the map again.
 - The tiles come from the internet. Make sure that the computer is
   connected.
 

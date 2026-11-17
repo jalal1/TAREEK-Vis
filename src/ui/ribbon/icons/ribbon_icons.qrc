@@ -35,6 +35,9 @@
         <file alias="circle-dot-16.png">png/circle-dot-16.png</file>
         <file alias="circle-dot-32.png">png/circle-dot-32.png</file>
         <file alias="circle-dot-64.png">png/circle-dot-64.png</file>
+        <file alias="clock-16.png">png/clock-16.png</file>
+        <file alias="clock-32.png">png/clock-32.png</file>
+        <file alias="clock-64.png">png/clock-64.png</file>
         <file alias="copy-16.png">png/copy-16.png</file>
         <file alias="copy-32.png">png/copy-32.png</file>
         <file alias="copy-64.png">png/copy-64.png</file>
@@ -104,6 +107,9 @@
         <file alias="maximize-16.png">png/maximize-16.png</file>
         <file alias="maximize-32.png">png/maximize-32.png</file>
         <file alias="maximize-64.png">png/maximize-64.png</file>
+        <file alias="paint-bucket-16.png">png/paint-bucket-16.png</file>
+        <file alias="paint-bucket-32.png">png/paint-bucket-32.png</file>
+        <file alias="paint-bucket-64.png">png/paint-bucket-64.png</file>
         <file alias="palette-16.png">png/palette-16.png</file>
         <file alias="palette-32.png">png/palette-32.png</file>
         <file alias="palette-64.png">png/palette-64.png</file>
@@ -149,6 +155,9 @@
         <file alias="timer-16.png">png/timer-16.png</file>
         <file alias="timer-32.png">png/timer-32.png</file>
         <file alias="timer-64.png">png/timer-64.png</file>
+        <file alias="traffic-cone-16.png">png/traffic-cone-16.png</file>
+        <file alias="traffic-cone-32.png">png/traffic-cone-32.png</file>
+        <file alias="traffic-cone-64.png">png/traffic-cone-64.png</file>
         <file alias="train-front-16.png">png/train-front-16.png</file>
         <file alias="train-front-32.png">png/train-front-32.png</file>
         <file alias="train-front-64.png">png/train-front-64.png</file>

@@ -62,6 +62,9 @@ proceedings are published.
   transit vehicle. Show the route of a person on the map.
 - Find a link, a person or a vehicle by its ID.
 - Click a road to see its details and its hourly traffic volume.
+- Color the roads by network attributes or by simulation results over the
+  day (flow, speed, delay, density, volume / capacity, delayed vehicles),
+  with a legend.
 - Compare simulated volumes with traffic counts. Export the chart of each
   count station and a table of the totals, the ratio and the GEH.
 - Show bus, tram and rail routes and stops.

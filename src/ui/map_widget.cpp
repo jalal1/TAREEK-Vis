@@ -2,6 +2,7 @@
 #include "core/video_recorder.h"
 #include "core/logger.h"
 #include "renderer/heatmap_palette.h"
+#include "renderer/link_palette.h"
 #include "core/modes.h"
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -12,6 +13,34 @@
 #include <cmath>
 
 namespace simvis {
+
+namespace {
+
+// The class colors of a metric, from its palette (renderer/link_palette.h).
+// The map and the legend both use this, so they always agree.
+std::vector<linkpalette::Rgb> linkClassColorsFor(const linkmetrics::Metric& metric, size_t classes,
+                                                 bool lightBackground) {
+    std::vector<linkpalette::Rgb> colors;
+    switch (metric.palette) {
+        case linkmetrics::Palette::Sequential:
+            colors = linkpalette::sequential(static_cast<int>(classes));
+            break;
+        case linkmetrics::Palette::Congestion:
+            colors.assign(linkpalette::kCongestion.begin(), linkpalette::kCongestion.end());
+            if (metric.lowIsWorst) std::reverse(colors.begin(), colors.end());
+            break;
+        case linkmetrics::Palette::Categorical:
+            colors.assign(linkpalette::kCategorical.begin(), linkpalette::kCategorical.end());
+            break;
+        case linkmetrics::Palette::RoadType:
+            colors = linkpalette::roadGrays(lightBackground);
+            break;
+    }
+    colors.resize(classes, linkpalette::kNoData);
+    return colors;
+}
+
+} // namespace
 
 MapWidget::MapWidget(QWidget* parent)
     : QOpenGLWidget(parent)
@@ -54,6 +83,7 @@ void MapWidget::setNetworkIndex(NetworkIndex* index) {
     }
     if (airOverlayRenderer_) airOverlayRenderer_->setNetworkIndex(index);
     applyAirSettings();
+    applyLinkColors();
     fitToNetwork();
     update();
 }
@@ -228,6 +258,14 @@ void MapWidget::setSimulationTime(float time) {
         updateVehicleHalo();
     }
 
+    // A result color mode that follows the time: new colors when the time
+    // moves into another bin of the link table, not at each frame
+    if (linkTable_ && linkWindowStartS_ < 0.0 &&
+        linkmetrics::metric(linkColorMode_).timeDependent &&
+        linkTable_->binOf(simulationTime_) != linkTableBin_) {
+        applyLinkColors();
+    }
+
     emit simulationTimeChanged(simulationTime_);
     update();
 }
@@ -277,6 +315,8 @@ void MapWidget::setShowBackgroundMap(bool show) {
     if (tileRenderer_) {
         tileRenderer_->setEnabled(show);
     }
+    // The Road Type grays depend on the background
+    if (shownLinkMode_ == linkmetrics::Mode::RoadType) applyLinkColors();
     update();
 }
 
@@ -290,6 +330,7 @@ void MapWidget::setTileSource(TileSource source) {
         tileRenderer_->setTileSource(source);
         doneCurrent();
     }
+    if (shownLinkMode_ == linkmetrics::Mode::RoadType) applyLinkColors();
     update();
 }
 
@@ -774,6 +815,7 @@ void MapWidget::initializeGL() {
         airOverlayRenderer_->setNetworkIndex(networkIndex_);
     }
     applyAirSettings();
+    applyLinkColors();
 
     if (vehicleIndex_) {
         vehicleRenderer_->setVehicleIndex(vehicleIndex_);
@@ -869,7 +911,11 @@ void MapWidget::paintGL() {
         // the ramp is drawn with its value range whenever the map is shown.
         {
             QPainter painter(this);
-            drawHeatmapLegend(painter, size(), 1.0);
+            // Keys at the bottom left, from the bottom up: heatmap, links,
+            // vehicles. The height key of aircraft is at the bottom right.
+            const int heatmapTop = drawHeatmapLegend(painter, size(), 1.0);
+            const int linkTop = drawLinkLegend(painter, size(), 1.0, heatmapTop);
+            drawVehicleLegend(painter, size(), 1.0, linkTop);
             drawAltitudeLegend(painter, size(), 1.0);
         }
 
@@ -1390,7 +1436,13 @@ QImage MapWidget::renderToImage(int scaleFactor) {
     glViewport(0, 0, outW, outH);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+    // Keep the alpha of the clear (opaque). The layers blend with alpha < 1,
+    // and the blend also writes to the alpha channel: the image then has
+    // transparent pixels, and a viewer shows a dim link (no data, pt, rail)
+    // over its own background, much lighter than on the live map.
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
     drawLayers();
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
     QImage image = fbo.toImage();
     fbo.release();
@@ -1400,7 +1452,9 @@ QImage MapWidget::renderToImage(int scaleFactor) {
     // scale, or the export shows colors with nothing to read them against.
     if (!image.isNull()) {
         QPainter painter(&image);
-        drawHeatmapLegend(painter, image.size(), dpr * scaleFactor);
+        const int heatmapTop = drawHeatmapLegend(painter, image.size(), dpr * scaleFactor);
+        const int linkTop = drawLinkLegend(painter, image.size(), dpr * scaleFactor, heatmapTop);
+        drawVehicleLegend(painter, image.size(), dpr * scaleFactor, linkTop);
         drawAltitudeLegend(painter, image.size(), dpr * scaleFactor);
     }
 
@@ -1426,10 +1480,10 @@ QImage MapWidget::renderToImage(int scaleFactor) {
     return image;
 }
 
-void MapWidget::drawAltitudeLegend(QPainter& painter, const QSize& deviceSize, qreal scale) {
+int MapWidget::drawAltitudeLegend(QPainter& painter, const QSize& deviceSize, qreal scale) {
     if (!hasAirVehicles_ || !showVehicles_ || airTopHeight_ <= 0.0f ||
         !vehicleRenderer_ || vehicleRenderer_->colorMode() != VehicleColorMode::Speed) {
-        return;
+        return deviceSize.height();
     }
 
     painter.save();
@@ -1471,12 +1525,13 @@ void MapWidget::drawAltitudeLegend(QPainter& painter, const QSize& deviceSize, q
     painter.drawText(QRectF(x + kBarW / 2, y + kBarH + 2 * scale, kBarW / 2, 14 * scale),
                      Qt::AlignRight, tr("%1 m").arg(airTopHeight_, 0, 'f', 0));
     painter.restore();
+    return static_cast<int>(panel.top());
 }
 
-void MapWidget::drawHeatmapLegend(QPainter& painter, const QSize& deviceSize, qreal scale) {
+int MapWidget::drawHeatmapLegend(QPainter& painter, const QSize& deviceSize, qreal scale) {
     if (!heatmapRenderer_ || !heatmapRenderer_->visible() ||
         !heatmapRenderer_->hasData()) {
-        return;
+        return deviceSize.height();
     }
 
     painter.save();
@@ -1551,6 +1606,320 @@ void MapWidget::drawHeatmapLegend(QPainter& painter, const QSize& deviceSize, qr
     painter.drawText(QRectF(x, y + kBarH + 16 * scale, kBarW * 2, 14 * scale),
                      Qt::AlignLeft, scaleText);
 
+    painter.restore();
+    return static_cast<int>(panel.top());
+}
+
+namespace {
+
+// Half width of a class on the map, in pixels. In an ordered scale the least
+// important class is thin (1.5 px) and the most important one wide (3.5 px):
+// most links are in the lowest class (82 % of the Twin Cities links have
+// 600 veh/h), and at one width they cover the map at the metro zoom.
+// Categories have no order: one width (2.5 px).
+float linkClassHalfWidth(const linkmetrics::Metric& metric, size_t classes, size_t classIndex) {
+    if (metric.palette == linkmetrics::Palette::Categorical) return 1.25f;
+    if (metric.palette == linkmetrics::Palette::RoadType)
+        return linkpalette::kRoadHalfWidthPx[std::min(classIndex, linkpalette::kRoadHalfWidthPx.size() - 1)];
+    float importance = classes > 1 ? static_cast<float>(classIndex) / static_cast<float>(classes - 1) : 1.0f;
+    if (metric.lowIsWorst) importance = 1.0f - importance;
+    return 0.75f + 1.0f * importance;
+}
+
+// "08:15". Runs pass 24:00, so the hour is not folded: "25:30".
+QString clockText(double seconds) {
+    const int total = static_cast<int>(std::lround(seconds / 60.0));
+    return QString("%1:%2").arg(total / 60, 2, 10, QChar('0')).arg(total % 60, 2, 10, QChar('0'));
+}
+
+} // namespace
+
+void MapWidget::setLinkColorMode(linkmetrics::Mode mode) {
+    if (mode == linkColorMode_) return;
+    linkColorMode_ = mode;
+    applyLinkColors();
+    update();
+}
+
+void MapWidget::setLinkTimeTable(std::shared_ptr<const LinkTimeTable> table,
+                                 const linkmetrics::RunFactors& factors,
+                                 const std::map<linkmetrics::Mode, float>& robustMax) {
+    linkTable_ = std::move(table);
+    runFactors_ = factors;
+    robustMax_ = robustMax;
+    linkTableBin_ = UINT32_MAX;
+    if (linkmetrics::metric(linkColorMode_).timeDependent) {
+        applyLinkColors();
+        update();
+    }
+}
+
+void MapWidget::setRunFactors(const linkmetrics::RunFactors& factors) {
+    runFactors_ = factors;
+    if (linkmetrics::metric(linkColorMode_).timeDependent) {
+        applyLinkColors();
+        update();
+    }
+}
+
+void MapWidget::setLinkTimeWindow(double startS, double endS) {
+    linkWindowStartS_ = startS;
+    linkWindowEndS_ = endS;
+    if (linkmetrics::metric(linkColorMode_).timeDependent) {
+        applyLinkColors();
+        update();
+    }
+}
+
+void MapWidget::linkWindowBins(uint32_t& b0, uint32_t& b1) const {
+    if (!linkTable_ || linkTable_->empty()) { b0 = b1 = 0; return; }
+    const double bin = linkTable_->binSeconds();
+    if (linkWindowStartS_ < 0.0) {
+        b0 = linkTable_->binOf(simulationTime_);
+        b1 = b0 + 1;
+        return;
+    }
+    const double last = static_cast<double>(linkTable_->binCount());
+    b0 = static_cast<uint32_t>(std::clamp(std::floor(linkWindowStartS_ / bin), 0.0, last - 1.0));
+    b1 = static_cast<uint32_t>(std::clamp(std::ceil(linkWindowEndS_ / bin), b0 + 1.0, last));
+}
+
+bool MapWidget::lightLinkBackground() const {
+    // Satellite images are dark: the same grays as the dark map
+    return showBackgroundMap() && tileSource() != TileSource::Satellite;
+}
+
+void MapWidget::applyLinkColors() {
+    if (!networkRenderer_) return;
+    if (!networkIndex_) {
+        networkRenderer_->clearLinkValues();
+        linkTableBin_ = UINT32_MAX;
+        shownLinkMode_ = linkmetrics::Mode::RoadType;
+        return;
+    }
+    // A result mode before its table is ready shows the road types
+    linkmetrics::Mode mode = linkColorMode_;
+    if (linkmetrics::metric(mode).timeDependent && !linkTable_) mode = linkmetrics::Mode::RoadType;
+    shownLinkMode_ = mode;
+    const linkmetrics::Metric& metric = linkmetrics::metric(mode);
+    const auto& links = networkIndex_->allLinks();
+    // The robust maxima are of the sample values: scale them as the values
+    const auto robust = robustMax_.find(mode);
+    float top = robust == robustMax_.end() ? 0.0f : robust->second;
+    if (metric.sampleScaled && runFactors_.scale > 0.0) top *= static_cast<float>(runFactors_.scale);
+    linkClasses_ = linkmetrics::classesFor(metric, top);
+
+    std::vector<float> values;
+    if (!metric.timeDependent) linkTableBin_ = UINT32_MAX;
+    if (metric.timeDependent) {
+        uint32_t b0 = 0, b1 = 0;
+        linkWindowBins(b0, b1);
+        QElapsedTimer timer;
+        timer.start();
+        linkmetrics::resultValues(mode, *linkTable_, links, b0, b1, runFactors_, values);
+        linkTableBin_ = b0;
+        LOG_INFO(QString("Link colors: %1, bins %2-%3, values in %4 ms")
+                     .arg(QString::fromUtf8(metric.key)).arg(b0).arg(b1)
+                     .arg(timer.nsecsElapsed() / 1e6, 0, 'f', 2));
+    } else {
+        values = linkmetrics::attributeValues(mode, links, networkIndex_->capPeriodS());
+    }
+
+    NetworkRenderer::LinkClasses classes;
+    classes.limits = linkClasses_.limits;
+    classes.lowOnTop = metric.lowIsWorst;
+    // Road Type is the base map: one line per road, no edge
+    const bool roadType = mode == linkmetrics::Mode::RoadType;
+    classes.offsetDirections = !roadType;
+    classes.edge = !roadType;
+    const size_t n = linkClasses_.limits.size() + 1;
+    for (const linkpalette::Rgb& c : linkClassColorsFor(metric, n, lightLinkBackground()))
+        classes.colors.push_back({c.r, c.g, c.b});
+    for (size_t i = 0; i < n; ++i) classes.halfWidthsPx.push_back(linkClassHalfWidth(metric, n, i));
+    linkNoDataCount_ = static_cast<size_t>(
+        std::count_if(values.begin(), values.end(), linkmetrics::isNoData));
+    networkRenderer_->setLinkValues(values, classes);
+}
+
+int MapWidget::drawLinkLegend(QPainter& painter, const QSize& deviceSize, qreal scale, int bottom) {
+    // Road Type (also while a result mode waits for its table) has no legend
+    if (shownLinkMode_ == linkmetrics::Mode::RoadType || !networkIndex_ ||
+        !networkRenderer_ || !networkRenderer_->hasLinkValues()) {
+        return bottom;
+    }
+    const linkmetrics::Metric& metric = linkmetrics::metric(linkColorMode_);
+    const size_t classCount = linkClasses_.limits.size() + 1;
+    const std::vector<linkpalette::Rgb> colors = linkClassColorsFor(metric, classCount, lightLinkBackground());
+
+    // Title: the metric and its unit. A capacity with no capacity period in
+    // the network stays in the unit of the file; the key says so.
+    QString title = QString::fromUtf8(metric.name);
+    QStringList notes;
+    if (linkColorMode_ == linkmetrics::Mode::Capacity && networkIndex_->capPeriodS() == 0) {
+        title += tr(" (veh per period)");
+        notes << tr("The network has no capacity period:") << tr("raw values of the file");
+    } else if (metric.unit[0] != '\0') {
+        title += QString(" (%1)").arg(QString::fromUtf8(metric.unit));
+    }
+    if (metric.timeDependent && linkTable_) {
+        // The time window of the colors
+        uint32_t b0 = 0, b1 = 0;
+        linkWindowBins(b0, b1);
+        const double bin = linkTable_->binSeconds();
+        const QString window = clockText(b0 * bin) + " to " + clockText(b1 * bin);
+        notes << (linkWindowStartS_ < 0.0 ? tr("Time: %1").arg(window)
+                                          : tr("Time: %1 (fixed window)").arg(window));
+        // The sample factor of flow, density, v/c and queue
+        if (metric.sampleScaled) {
+            if (runFactors_.scale > 0.0) {
+                notes << tr("Scaled x%1 to the full population").arg(runFactors_.scale, 0, 'g', 4)
+                      << tr("(%1)").arg(QString::fromStdString(runFactors_.scaleSource));
+            } else {
+                notes << tr("Values of the sample: no sample scale")
+                      << tr("(Color By > Sample Scale...)");
+            }
+        }
+        if (linkColorMode_ == linkmetrics::Mode::VolumeCapacity && runFactors_.capPeriodS == 0)
+            notes << tr("The network has no capacity period: taken as 1 hour");
+        if (metric.scale == linkmetrics::Scale::RobustMax)
+            notes << tr("Classes to the 98th percentile of the day");
+    }
+
+    struct Row { QString label; bool noData; linkpalette::Rgb color; float halfWidthPx; };
+    std::vector<Row> rows;
+    // An ordered scale: the most important class at the top, as on the map
+    // (drawn last). Categories: in their own order.
+    const bool categorical = metric.palette == linkmetrics::Palette::Categorical;
+    for (size_t i = 0; i < colors.size(); ++i) {
+        const size_t c = (categorical || metric.lowIsWorst) ? i : colors.size() - 1 - i;
+        const QString label = c < linkClasses_.labels.size()
+                                  ? QString::fromStdString(linkClasses_.labels[c]) : QString();
+        rows.push_back({label, false, colors[c], linkClassHalfWidth(metric, classCount, c)});
+    }
+    if (metric.noDataLabel[0] != '\0' && linkNoDataCount_ > 0)
+        rows.push_back({QString::fromUtf8(metric.noDataLabel), true, linkpalette::kNoData, 0.6f});
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    QFont titleFont = painter.font();
+    titleFont.setPointSizeF(9 * scale);
+    titleFont.setBold(true);
+    QFont rowFont = painter.font();
+    rowFont.setPointSizeF(8 * scale);
+    const QFontMetricsF titleMetrics(titleFont);
+    const QFontMetricsF rowMetrics(rowFont);
+
+    const qreal pad = 12 * scale;
+    const qreal inner = 8 * scale;
+    const qreal rowH = 15 * scale;
+    const qreal titleH = 18 * scale;
+    const qreal swatchW = 24 * scale;
+    const qreal gap = 6 * scale;
+
+    qreal textW = titleMetrics.horizontalAdvance(title);
+    for (const Row& r : rows)
+        textW = std::max(textW, swatchW + gap + rowMetrics.horizontalAdvance(r.label));
+    for (const QString& n : notes) textW = std::max(textW, rowMetrics.horizontalAdvance(n));
+
+    const qreal panelW = textW + 2 * inner;
+    const qreal panelH = titleH + rows.size() * rowH + notes.size() * rowH + 2 * inner - 4 * scale;
+    // Above the heatmap key when it is there, else at the bottom left
+    const qreal panelBottom = bottom < deviceSize.height() ? bottom - gap : deviceSize.height() - pad;
+    const QRectF panel(pad - inner, panelBottom - panelH, panelW, panelH);
+
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(0, 0, 0, 170));
+    painter.drawRoundedRect(panel, 6 * scale, 6 * scale);
+
+    qreal y = panel.top() + inner - 2 * scale;
+    const qreal x = panel.left() + inner;
+    painter.setFont(titleFont);
+    painter.setPen(Qt::white);
+    painter.drawText(QRectF(x, y, textW, titleH), Qt::AlignLeft | Qt::AlignVCenter, title);
+    y += titleH;
+
+    painter.setFont(rowFont);
+    for (const Row& r : rows) {
+        const qreal cy = y + rowH / 2;
+        if (r.noData) {
+            // Thin and dim, as a link with no data on the map
+            QPen pen(QColor::fromRgbF(r.color.r, r.color.g, r.color.b, linkpalette::kNoDataAlpha + 0.25));
+            pen.setWidthF(2 * r.halfWidthPx * scale);
+            painter.setPen(pen);
+            painter.drawLine(QPointF(x, cy), QPointF(x + swatchW, cy));
+        } else {
+            // A short piece of link, as wide as on the map: the class color
+            // with the dark edge
+            const qreal swatchH = r.halfWidthPx * scale;
+            const auto& e = linkpalette::kEdge;
+            painter.setPen(QPen(QColor::fromRgbF(e.r, e.g, e.b), 0.6 * scale));
+            painter.setBrush(QColor::fromRgbF(r.color.r, r.color.g, r.color.b));
+            painter.drawRect(QRectF(x, cy - swatchH, swatchW, 2 * swatchH));
+        }
+        painter.setPen(QColor(220, 220, 220));
+        painter.drawText(QRectF(x + swatchW + gap, y, textW, rowH), Qt::AlignLeft | Qt::AlignVCenter, r.label);
+        y += rowH;
+    }
+    painter.setPen(QColor(200, 200, 200));
+    for (const QString& n : notes) {
+        painter.drawText(QRectF(x, y, textW, rowH), Qt::AlignLeft | Qt::AlignVCenter, n);
+        y += rowH;
+    }
+    painter.restore();
+    return static_cast<int>(panel.top());
+}
+
+void MapWidget::drawVehicleLegend(QPainter& painter, const QSize& deviceSize, qreal scale, int bottom) {
+    // The key of "By Vehicle Speed": the green-yellow-red ramp of the
+    // vehicles, as the heatmap key draws its ramp. Bottom left, above the
+    // link and heatmap keys, so all keys of the map are in one column.
+    if (!showVehicles_ || !vehicleRenderer_ || !vehicleIndex_ ||
+        vehicleRenderer_->colorMode() != VehicleColorMode::Speed) {
+        return;
+    }
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const qreal pad = 12 * scale, gap = 6 * scale;
+    const int kBarW = static_cast<int>(180 * scale);
+    const int kBarH = static_cast<int>(10 * scale);
+    QFont titleFont = painter.font();
+    titleFont.setPointSizeF(9 * scale);
+    titleFont.setBold(true);
+    QFont tickFont = painter.font();
+    tickFont.setPointSizeF(8 * scale);
+
+    // Title, bar, tick labels and the note line under them
+    const qreal panelH = kBarH + 56 * scale;
+    const qreal panelBottom = bottom < deviceSize.height() ? bottom - gap : deviceSize.height() - pad;
+    const QRectF panel(pad - 8 * scale, panelBottom - panelH, kBarW + 16 * scale, panelH);
+    const int x = static_cast<int>(pad);
+    const int y = static_cast<int>(panel.top() + 20 * scale);
+
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(0, 0, 0, 170));
+    painter.drawRoundedRect(panel, 6 * scale, 6 * scale);
+
+    painter.setFont(titleFont);
+    painter.setPen(Qt::white);
+    painter.drawText(QRectF(x, y - 18 * scale, kBarW, 16 * scale),
+                     Qt::AlignLeft | Qt::AlignVCenter, tr("Vehicles: by vehicle speed"));
+
+    // Stopped at the left, free flow at the right
+    for (int i = 0; i < kBarW; ++i) {
+        float r, g, b;
+        VehicleRenderer::getSpeedColor(static_cast<float>(i) / static_cast<float>(kBarW - 1), r, g, b);
+        painter.setPen(QColor::fromRgbF(r, g, b));
+        painter.drawLine(x + i, y, x + i, y + kBarH);
+    }
+    painter.setFont(tickFont);
+    painter.setPen(QColor(220, 220, 220));
+    painter.drawText(QRectF(x, y + kBarH + 2 * scale, kBarW / 2, 14 * scale), Qt::AlignLeft, tr("stopped"));
+    painter.drawText(QRectF(x + kBarW / 2, y + kBarH + 2 * scale, kBarW / 2, 14 * scale),
+                     Qt::AlignRight, tr("free flow"));
+    painter.drawText(QRectF(x, y + kBarH + 16 * scale, kBarW * 2, 14 * scale), Qt::AlignLeft,
+                     tr("Speed on its link / free speed"));
     painter.restore();
 }
 

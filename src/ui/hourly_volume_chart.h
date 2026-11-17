@@ -7,7 +7,9 @@
 
 namespace simvis {
 
-// Hourly link volume as 24 bars, one per hour of the day.
+// A link value over the day as bars: the hourly volume (one bar per hour), or
+// a metric of the link table per 15-minute bin (roadmap item 9). The bars
+// cover the whole run, also the hours after 24:00.
 //
 // Painted directly rather than with Qt Charts: QBarCategoryAxis elides its
 // category labels when 24 of them have to fit the 280px info panel, which left
@@ -21,8 +23,13 @@ class HourlyVolumeChart : public QWidget {
 public:
     explicit HourlyVolumeChart(QWidget* parent = nullptr);
 
-    // Expects 24 entries, hour 0 first. Anything else clears the chart.
+    // Vehicles per hour, hour 0 first. Empty clears the chart.
     void setVolumes(const std::vector<uint32_t>& volumes);
+    // Any value per slot of slotSeconds, slot 0 at 00:00. NaN = no data (no
+    // bar). unit is for the tooltip, for example "veh/km/lane"; decimals for
+    // the numbers. referenceValue > 0 draws a dashed line (v/c = 1).
+    void setSeries(const std::vector<double>& values, int slotSeconds, const QString& unit,
+                   int decimals, double referenceValue = 0.0);
 
     // Title and subtitle drawn on an exported chart (not on screen, where the
     // info panel already names the link). `fileStem` is the suggested file
@@ -52,12 +59,20 @@ private:
     void paintChart(QPainter& p, const QRect& area, const Colors& c,
                     int hoverHour, bool withTitle) const;
 
-    // Index of the hour slot under a widget-space x, or -1 outside the plot.
-    int hourAt(int x) const;
+    // Index of the slot under a widget-space x, or -1 outside the plot.
+    int slotAt(int x) const;
+    // Slots of the plot: the data, at least 24 hours
+    int slotCount() const;
+    double hours() const;
 
-    std::vector<uint32_t> volumes_;
-    uint32_t maxVolume_ = 0;
-    int hoverHour_ = -1;
+    std::vector<double> values_;
+    double maxValue_ = 0.0;
+    int slotSeconds_ = 3600;
+    QString unit_;
+    int decimals_ = 0;
+    bool volumes_ = true;          // whole vehicles ("3 vehicles")
+    double referenceValue_ = 0.0;
+    int hoverHour_ = -1;           // the slot under the cursor
 
     QString exportTitle_;
     QString exportSubtitle_;

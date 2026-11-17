@@ -24,7 +24,9 @@
 | Layers | Nodes, Links, Link Counts | Show or hide the layer. |
 | Layers | Info Panel | Show or hide the Info page of the side panel. |
 | Vehicles | All Vehicles, Private, Bus, Tram, Rail, Other Modes | Show or hide the vehicles of that type. Other Modes lists the other modes of the run. |
-| Vehicle Style | Shape, Size, Color | Change how vehicles look. |
+| Vehicle Style | Shape, Size | Change how vehicles look. |
+| Links | Color by | The menu has two parts. **Links**: color the road links by road type (the default), by a network attribute (capacity, free speed, lanes, allowed modes) or by a simulation result (flow, speed / free speed, delay, density, volume / capacity, delayed vehicles). **Vehicles**: By Vehicle Speed or By Mode (Icons). **Sample Scale...** sets the sample scale of the run. See [Link colors](link-colors.md). |
+| Links | Time | The time of the result colors: the current 15 minutes, a peak, the whole day or a custom window. |
 | Background Map | Background Map | Show or hide the background map. |
 | Background Map | Source | Select OpenStreetMap, Satellite or Topo Map. |
 

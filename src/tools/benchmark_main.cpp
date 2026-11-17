@@ -29,11 +29,13 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QRegularExpression>
 
 #include <zlib.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <map>
 #include <memory>
@@ -42,6 +44,12 @@
 #include "analysis/nkde_gather.h"
 #include "analysis/nkde_scatter.h"
 #include "analysis/nkdv_network.h"
+#include "analysis/link_metrics.h"
+#include "analysis/link_time_table.h"
+#include "renderer/link_palette.h"
+#include <chrono>
+#include <cmath>
+#include <unordered_map>
 #include "core/logger.h"
 #include "data/network_index.h"
 #include "core/modes.h"
@@ -292,6 +300,16 @@ bool loadIndices(const QString& scenarioDir,
     pre.setNetworkFile(files.network);
     pre.setEventsFile(files.events);
     pre.setOutputDirectory(cacheDir);
+
+    // A .bin of an older format, with a valid .vidx: make the .bin again
+    // only, as the app does (Preprocessor::rebuildNetworkBinary)
+    if (QFileInfo::exists(pre.networkBinaryPath()) &&
+        simvis::NetworkParser::readBinaryHeader(pre.networkBinaryPath().toStdString()).magic !=
+            simvis::NETWORK_FILE_MAGIC) {
+        note("Network .bin is of an older format: rebuilding it from " + files.network);
+        if (!simvis::Preprocessor::rebuildNetworkBinary(files.network, pre.networkBinaryPath()))
+            return false;
+    }
 
     network = std::make_unique<simvis::NetworkIndex>();
     if (!network->loadFile(pre.networkBinaryPath())) {
@@ -574,6 +592,373 @@ int cmdDensity(const QString& scenarioDir, const QString& onlyType,
 
 } // namespace
 
+// --- metrics ------------------------------------------------------------------
+// The classes of the link color modes (analysis/link_metrics.h) as a Markdown
+// table. help/link-colors.md holds this output, so the help page shows the
+// same classes as the app. Do not edit those tables by hand: change
+// src/analysis/link_metrics.cpp and run this command again. (No HTML comment
+// in the help page: the help viewer shows comments as text.)
+int cmdMetrics() {
+    // Two tables: the network attributes, then the simulation results
+    for (const bool results : {false, true}) {
+        if (results) std::printf("\n");
+        std::printf("| Color mode | Unit | What the value is | Classes | Gray, thin |\n");
+        std::printf("|------------|------|-------------------|---------|------------|\n");
+        for (const auto& m : simvis::linkmetrics::metrics()) {
+            if (m.mode == simvis::linkmetrics::Mode::RoadType || m.timeDependent != results) continue;
+            std::string classes;
+            if (m.scale == simvis::linkmetrics::Scale::RobustMax) {
+                classes = "5 equal classes up to the 98th percentile of the day";
+            } else {
+                for (const std::string& label : m.labels) {
+                    if (!classes.empty()) classes += "; ";
+                    classes += label;
+                }
+            }
+            std::string what = m.description;
+            if (m.sampleScaled) what += " Scaled to the full population.";
+            std::printf("| %s | %s | %s | %s | %s |\n", m.name, m.unit[0] ? m.unit : "-",
+                        what.c_str(), classes.c_str(), m.noDataLabel[0] ? m.noDataLabel : "-");
+        }
+    }
+
+    // Road Type: the gray level and width of each road level, most important
+    // first (renderer/link_palette.h)
+    const auto& road = simvis::linkmetrics::metric(simvis::linkmetrics::Mode::RoadType);
+    namespace lp = simvis::linkpalette;
+    auto hex = [](float v) {
+        const int c = static_cast<int>(std::lround(v * 255.0f));
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "#%02x%02x%02x", c, c, c);
+        return std::string(buf);
+    };
+    std::printf("\n| Road type | Width | Dark map, satellite | OSM, topo |\n");
+    std::printf("|-----------|------:|---------------------|-----------|\n");
+    for (size_t k = road.labels.size(); k-- > 0;) {
+        std::printf("| %s | %.1f px | %s | %s |\n", road.labels[k].c_str(),
+                    2.0 * lp::kRoadHalfWidthPx[k], hex(lp::kRoadGrayDark[k]).c_str(),
+                    hex(lp::kRoadGrayLight[k]).c_str());
+    }
+    std::printf("| %s | %.1f px | thin, dim gray | thin, dim gray |\n", road.noDataLabel, 1.2);
+    return 0;
+}
+
+// --- linkbins -------------------------------------------------------------------
+// The per-link, per-bin table of item 9 (docs/link-colors.md): build time,
+// size, cache save and load time, and the check against MATSim's linkstats
+// file of the same iteration.
+
+double secondsSince(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
+// One row of a linkstats file: per hour 0..23, min and max of the volume and
+// the travel time over the averaged iterations
+struct LinkstatsRow {
+    std::array<double, 24> volMin{}, volMax{}, ttMin{}, ttMax{};
+};
+
+bool readLinkstats(const QString& path, std::unordered_map<std::string, LinkstatsRow>& rows) {
+    gzFile file = gzopen(path.toStdString().c_str(), "rb");
+    if (!file) return false;
+    std::string line;
+    std::vector<char> buf(1 << 20);
+    std::vector<int> volMinCol(24, -1), volMaxCol(24, -1), ttMinCol(24, -1), ttMaxCol(24, -1);
+    bool header = true;
+    while (gzgets(file, buf.data(), static_cast<int>(buf.size()))) {
+        line.assign(buf.data());
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+        std::vector<std::string> cols;
+        size_t start = 0;
+        while (true) {
+            const size_t tab = line.find('\t', start);
+            cols.push_back(line.substr(start, tab == std::string::npos ? std::string::npos : tab - start));
+            if (tab == std::string::npos) break;
+            start = tab + 1;
+        }
+        if (header) {
+            for (size_t c = 0; c < cols.size(); ++c) {
+                for (int h = 0; h < 24; ++h) {
+                    const std::string hrs = "HRS" + std::to_string(h) + "-" + std::to_string(h + 1);
+                    const std::string tt = "TRAVELTIME" + std::to_string(h) + "-" + std::to_string(h + 1);
+                    if (cols[c] == hrs + "min") volMinCol[h] = static_cast<int>(c);
+                    if (cols[c] == hrs + "max") volMaxCol[h] = static_cast<int>(c);
+                    if (cols[c] == tt + "min") ttMinCol[h] = static_cast<int>(c);
+                    if (cols[c] == tt + "max") ttMaxCol[h] = static_cast<int>(c);
+                }
+            }
+            header = false;
+            continue;
+        }
+        LinkstatsRow row;
+        auto num = [&](int c) { return c >= 0 && c < static_cast<int>(cols.size()) ? std::atof(cols[c].c_str()) : 0.0; };
+        for (int h = 0; h < 24; ++h) {
+            row.volMin[h] = num(volMinCol[h]);
+            row.volMax[h] = num(volMaxCol[h]);
+            row.ttMin[h] = num(ttMinCol[h]);
+            row.ttMax[h] = num(ttMaxCol[h]);
+        }
+        rows.emplace(cols[0], row);
+    }
+    gzclose(file);
+    return true;
+}
+
+int cmdLinkbins(const QString& scenarioDir, int binSeconds, int repeat, int threads) {
+    std::unique_ptr<simvis::NetworkIndex> network;
+    std::unique_ptr<simvis::VehicleIndex> vehicles;
+    if (!loadIndices(scenarioDir, network, vehicles)) return 2;
+    const auto& links = network->allLinks();
+    for (size_t i = 0; i < links.size(); ++i) {
+        if (links[i].id != i) {
+            note(QString("Link %1 has id %2: the table needs id == index").arg(i).arg(links[i].id));
+            return 2;
+        }
+    }
+
+    // Build
+    QJsonArray buildTimes;
+    simvis::LinkTimeTable table;
+    for (int r = 0; r < std::max(1, repeat); ++r) {
+        table = simvis::LinkTimeTable::build(*vehicles, links, static_cast<uint32_t>(binSeconds), threads);
+        buildTimes.append(table.buildSeconds());
+        note(QString("build %1: %2 s").arg(r + 1).arg(table.buildSeconds(), 0, 'f', 3));
+    }
+
+    // Save and load
+    const ScenarioFiles files = discover(scenarioDir);
+    simvis::Preprocessor pre;
+    pre.setEventsFile(files.events);
+    pre.setNetworkFile(files.network);
+    pre.setOutputDirectory(cacheDirFor(scenarioDir));
+    const QString vidx = pre.vehicleIndexPath();
+    simvis::LinkTimeTable::Source source;
+    source.vidxBytes = static_cast<uint64_t>(QFileInfo(vidx).size());
+    source.vidxModifiedMs = QFileInfo(vidx).lastModified().toMSecsSinceEpoch();
+    source.vidxVersion = simvis::VehicleIndex::fileVersion(vidx);
+    source.networkHash = simvis::LinkTimeTable::networkHash(links);
+    const QString cachePath = QDir(cacheDirFor(scenarioDir)).absoluteFilePath(
+        QString("bench_%1.linkbins").arg(binSeconds));
+    auto t0 = std::chrono::steady_clock::now();
+    const bool saved = table.save(cachePath.toStdString(), source);
+    const double saveS = secondsSince(t0);
+    simvis::LinkTimeTable loaded;
+    t0 = std::chrono::steady_clock::now();
+    const bool loadedOk = loaded.load(cachePath.toStdString(), source);
+    const double loadS = secondsSince(t0);
+    const bool same = loadedOk && loaded.entryCount() == table.entryCount() &&
+                      loaded.binCount() == table.binCount();
+    simvis::LinkTimeTable::Source other = source;
+    other.vidxModifiedMs += 1;
+    simvis::LinkTimeTable rejected;
+    const bool rejectsOtherVidx = !rejected.load(cachePath.toStdString(), other);
+    const qint64 fileBytes = QFileInfo(cachePath).size();
+    QFile::remove(cachePath);
+
+    // Totals: every segment enters one time
+    uint64_t enters = 0;
+    double vehicleH = 0.0, queueH = 0.0;
+    for (uint32_t b = 0; b < table.binCount(); ++b)
+        for (const auto& e : table.bin(b)) {
+            enters += e.enters;
+            vehicleH += e.vehicleS / 3600.0;
+            queueH += e.queueS / 3600.0;
+        }
+    uint64_t segments = 0;
+    for (size_t v = 0; v < vehicles->vehicleCount(); ++v)
+        if (const auto* t = vehicles->trajectory(static_cast<uint32_t>(v))) segments += t->segments.size();
+
+    QJsonObject record{
+        {"experiment", "linkbins"},
+        {"scenario", QFileInfo(scenarioDir).fileName()},
+        {"bin_s", binSeconds},
+        {"threads", threads},
+        {"bins", static_cast<qint64>(table.binCount())},
+        {"entries", static_cast<qint64>(table.entryCount())},
+        {"table_mb", static_cast<double>(table.memoryBytes()) / 1048576.0},
+        {"build_s", buildTimes},
+        {"file_mb", static_cast<double>(fileBytes) / 1048576.0},
+        {"save_s", saveS},
+        {"load_s", loadS},
+        {"save_load_same", same && saved},
+        {"rejects_other_vidx", rejectsOtherVidx},
+        {"sum_enters", static_cast<qint64>(enters)},
+        {"segments", static_cast<qint64>(segments)},
+        {"vehicle_hours", vehicleH},
+        {"queue_hours", queueH},
+    };
+
+    // Linkstats check: the newest *.linkstats.txt.gz in the scenario folder
+    const QStringList statsFiles = QDir(scenarioDir).entryList({"*.linkstats.txt.gz"}, QDir::Files, QDir::Name);
+    if (!statsFiles.isEmpty() && binSeconds > 0 && 3600 % binSeconds == 0) {
+        const QString statsPath = QDir(scenarioDir).absoluteFilePath(statsFiles.last());
+        std::unordered_map<std::string, LinkstatsRow> rows;
+        if (readLinkstats(statsPath, rows)) {
+            // Volumes by leave hour, from the raw segments, to see which event
+            // the linkstats count. Hours after 24 go into hour 23, as MATSim's
+            // VolumesAnalyzer puts every time after its end into its last bin.
+            std::vector<uint32_t> leaveHour(links.size() * 24, 0);
+            // The same with only the real link events: a segment that starts
+            // a trip has no "entered link" event, and one that ends a trip
+            // has no "left link" event. A segment starts a trip when the one
+            // before it (same vehicle) did not end at its enter time.
+            std::vector<uint32_t> leaveHourEvents(links.size() * 24, 0);
+            std::vector<uint32_t> enterHourEvents(links.size() * 24, 0);
+            std::vector<double> ttSumEvents(links.size() * 24, 0.0);
+            std::vector<uint32_t> ttCountEvents(links.size() * 24, 0);
+            // MATSim's linkstats travel time of hour h is the travel time of
+            // the travel time bin (900 s) that holds h:00
+            std::vector<double> ttSumQuarter(links.size() * 24, 0.0);
+            std::vector<uint32_t> ttCountQuarter(links.size() * 24, 0);
+            uint64_t tripStarts = 0, tripEnds = 0;
+            for (size_t v = 0; v < vehicles->vehicleCount(); ++v) {
+                const auto* t = vehicles->trajectory(static_cast<uint32_t>(v));
+                if (!t) continue;
+                const auto& segs = t->segments;
+                for (size_t k = 0; k < segs.size(); ++k) {
+                    const auto& s = segs[k];
+                    if (s.linkId >= links.size()) continue;
+                    const uint32_t h = std::min<uint32_t>(s.leaveTime / 3600000u, 23u);
+                    ++leaveHour[static_cast<size_t>(s.linkId) * 24 + h];
+                    const bool start = k == 0 || segs[k - 1].leaveTime != s.enterTime;
+                    const bool end = k + 1 == segs.size() || segs[k + 1].enterTime != s.leaveTime;
+                    tripStarts += start;
+                    tripEnds += end;
+                    if (!end) ++leaveHourEvents[static_cast<size_t>(s.linkId) * 24 + h];
+                    if (!start) {
+                        const uint32_t he = std::min<uint32_t>(s.enterTime / 3600000u, 23u);
+                        ++enterHourEvents[static_cast<size_t>(s.linkId) * 24 + he];
+                        if (!end) {
+                            ttSumEvents[static_cast<size_t>(s.linkId) * 24 + he] +=
+                                (s.leaveTime - s.enterTime) / 1000.0;
+                            ++ttCountEvents[static_cast<size_t>(s.linkId) * 24 + he];
+                            if (s.enterTime % 3600000u < 900000u && s.enterTime < 24u * 3600000u) {
+                                ttSumQuarter[static_cast<size_t>(s.linkId) * 24 + he] +=
+                                    (s.leaveTime - s.enterTime) / 1000.0;
+                                ++ttCountQuarter[static_cast<size_t>(s.linkId) * 24 + he];
+                            }
+                        }
+                    }
+                }
+            }
+            uint64_t leaveEvMatch = 0, enterEvMatch = 0, ttEvPairs = 0, ttEvIn = 0;
+            uint64_t overMax = 0, underMin = 0;
+            uint64_t ttQPairs = 0, ttQIn = 0;
+            double ttQAbs = 0.0;
+            double ttEvAbs = 0.0, ttEvMax = 0.0;
+            const int binsPerHour = 3600 / binSeconds;
+            // Pairs (link, hour) with traffic in the linkstats or in the table
+            uint64_t pairs = 0, enterMatch = 0, enterIn = 0, leaveMatch = 0, leaveIn = 0;
+            uint64_t pairs23 = 0, leave23Match = 0, enter23Match = 0;
+            double enterAbsDiff = 0.0, leaveAbsDiff = 0.0;
+            uint64_t ttPairs = 0, ttIn = 0;
+            double ttAbsDiff = 0.0, ttMaxDiff = 0.0;
+            uint64_t linksMissing = 0;
+            const auto& ids = network->linkIds();
+            for (const auto& [id, row] : rows) {
+                const uint32_t link = network->findLinkByOriginalId(id);
+                if (link == UINT32_MAX) { ++linksMissing; continue; }
+                for (int h = 0; h < 24; ++h) {
+                    simvis::LinkSums sums;
+                    for (int k = 0; k < binsPerHour; ++k) {
+                        if (const auto* e = table.find(link, static_cast<uint32_t>(h * binsPerHour + k)))
+                            sums.add(*e);
+                    }
+                    // Hour 23 of the enter count: everything from 23:00 on
+                    if (h == 23) {
+                        for (uint32_t b = 24 * binsPerHour; b < table.binCount(); ++b)
+                            if (const auto* e = table.find(link, b)) sums.add(*e);
+                    }
+                    const double enterVol = sums.enters;
+                    const double leaveVol = leaveHour[static_cast<size_t>(link) * 24 + h];
+                    if (row.volMax[h] == 0 && enterVol == 0 && leaveVol == 0) continue;
+                    ++pairs;
+                    auto near = [&](double v) {
+                        return std::min(std::abs(v - row.volMin[h]), std::abs(v - row.volMax[h]));
+                    };
+                    const bool em = near(enterVol) < 0.5, lm = near(leaveVol) < 0.5;
+                    enterMatch += em;
+                    leaveMatch += lm;
+                    enterIn += enterVol >= row.volMin[h] - 0.5 && enterVol <= row.volMax[h] + 0.5;
+                    leaveIn += leaveVol >= row.volMin[h] - 0.5 && leaveVol <= row.volMax[h] + 0.5;
+                    enterAbsDiff += near(enterVol);
+                    leaveAbsDiff += near(leaveVol);
+                    if (h == 23) { ++pairs23; leave23Match += lm; enter23Match += em; }
+                    const size_t ix = static_cast<size_t>(link) * 24 + h;
+                    if (near(leaveHourEvents[ix]) >= 0.5) {
+                        if (leaveHourEvents[ix] > row.volMax[h]) ++overMax;
+                        if (leaveHourEvents[ix] < row.volMin[h]) ++underMin;
+                    }
+                    leaveEvMatch += near(leaveHourEvents[ix]) < 0.5;
+                    enterEvMatch += near(enterHourEvents[ix]) < 0.5;
+                    if (h < 23 && ttCountQuarter[ix] > 0) {
+                        const double tt = ttSumQuarter[ix] / ttCountQuarter[ix];
+                        const double d = tt < row.ttMin[h] ? row.ttMin[h] - tt
+                                       : tt > row.ttMax[h] ? tt - row.ttMax[h] : 0.0;
+                        ++ttQPairs;
+                        ttQIn += d < 0.01;
+                        ttQAbs += d;
+                    }
+                    if (h < 23 && ttCountEvents[ix] > 0) {
+                        const double tt = ttSumEvents[ix] / ttCountEvents[ix];
+                        const double d = tt < row.ttMin[h] ? row.ttMin[h] - tt
+                                       : tt > row.ttMax[h] ? tt - row.ttMax[h] : 0.0;
+                        ++ttEvPairs;
+                        ttEvIn += d < 0.01;
+                        ttEvAbs += d;
+                        ttEvMax = std::max(ttEvMax, d);
+                    }
+
+                    // Mean travel time of the vehicles that entered in the hour
+                    // (TravelTimeCalculator: by enter time). Hours 0..22 only.
+                    if (h < 23 && sums.enters > 0) {
+                        const double tt = sums.travelS / sums.enters;
+                        const double d = tt < row.ttMin[h] ? row.ttMin[h] - tt
+                                       : tt > row.ttMax[h] ? tt - row.ttMax[h] : 0.0;
+                        ++ttPairs;
+                        ttIn += d < 0.01;
+                        ttAbsDiff += d;
+                        ttMaxDiff = std::max(ttMaxDiff, d);
+                    }
+                }
+            }
+            (void)ids;
+            record["linkstats_file"] = statsFiles.last();
+            record["linkstats_links"] = static_cast<qint64>(rows.size());
+            record["linkstats_links_missing"] = static_cast<qint64>(linksMissing);
+            record["volume_pairs"] = static_cast<qint64>(pairs);
+            record["volume_enter_equals_min_or_max"] = static_cast<double>(enterMatch) / pairs;
+            record["volume_enter_inside_min_max"] = static_cast<double>(enterIn) / pairs;
+            record["volume_enter_mean_abs_diff"] = enterAbsDiff / pairs;
+            record["volume_leave_equals_min_or_max"] = static_cast<double>(leaveMatch) / pairs;
+            record["volume_leave_inside_min_max"] = static_cast<double>(leaveIn) / pairs;
+            record["volume_leave_mean_abs_diff"] = leaveAbsDiff / pairs;
+            record["hour23_pairs"] = static_cast<qint64>(pairs23);
+            record["hour23_enter_match"] = pairs23 ? static_cast<double>(enter23Match) / pairs23 : 0.0;
+            record["hour23_leave_match"] = pairs23 ? static_cast<double>(leave23Match) / pairs23 : 0.0;
+            record["traveltime_pairs"] = static_cast<qint64>(ttPairs);
+            record["traveltime_inside_min_max"] = ttPairs ? static_cast<double>(ttIn) / ttPairs : 0.0;
+            record["traveltime_mean_abs_diff_s"] = ttPairs ? ttAbsDiff / ttPairs : 0.0;
+            record["traveltime_max_diff_s"] = ttMaxDiff;
+            record["trip_start_segments"] = static_cast<qint64>(tripStarts);
+            record["trip_end_segments"] = static_cast<qint64>(tripEnds);
+            record["events_only_leave_equals_min_or_max"] = static_cast<double>(leaveEvMatch) / pairs;
+            record["events_only_enter_equals_min_or_max"] = static_cast<double>(enterEvMatch) / pairs;
+            record["events_only_traveltime_pairs"] = static_cast<qint64>(ttEvPairs);
+            record["events_only_traveltime_inside"] = ttEvPairs ? static_cast<double>(ttEvIn) / ttEvPairs : 0.0;
+            record["events_only_traveltime_mean_abs_diff_s"] = ttEvPairs ? ttEvAbs / ttEvPairs : 0.0;
+            record["events_only_traveltime_max_diff_s"] = ttEvMax;
+            record["events_only_leave_over_max"] = static_cast<qint64>(overMax);
+            record["events_only_leave_under_min"] = static_cast<qint64>(underMin);
+            record["first_quarter_traveltime_pairs"] = static_cast<qint64>(ttQPairs);
+            record["first_quarter_traveltime_inside"] = ttQPairs ? static_cast<double>(ttQIn) / ttQPairs : 0.0;
+            record["first_quarter_traveltime_mean_abs_diff_s"] = ttQPairs ? ttQAbs / ttQPairs : 0.0;
+        }
+    }
+    emitRecord(record);
+    return 0;
+}
+
 int main(int argc, char* argv[]) {
     // QCoreApplication, not QApplication: no display is required or requested.
     QCoreApplication app(argc, argv);
@@ -588,11 +973,15 @@ int main(int argc, char* argv[]) {
         "Commands:\n"
         "  preprocess   Convert scenario XML to the binary cache, timed\n"
         "  stats        Report scenario size and index memory\n"
-        "  density      Compute activity density maps, timed\n\n"
+        "  density      Compute activity density maps, timed\n"
+        "  metrics      Print the link color classes as a Markdown table\n"
+        "  linkbins     Build the per-link time table, timed; check it against\n"
+        "               the linkstats file of the run\n"
+        "               (for help/link-colors.md; needs no scenario)\n\n"
         "Results are printed to stdout as one JSON object per line.");
     parser.addHelpOption();
     parser.addVersionOption();
-    parser.addPositionalArgument("command", "preprocess | stats | density");
+    parser.addPositionalArgument("command", "preprocess | stats | density | metrics | linkbins");
 
     const QCommandLineOption scenarioOpt(
         {"s", "scenario"}, "Scenario directory holding the MATSim XML.", "dir");
@@ -610,8 +999,13 @@ int main(int argc, char* argv[]) {
         "gather", "Also run the standard lixel-driven baseline and compare. "
                   "Much slower: expect minutes per activity type.");
 
+    const QCommandLineOption binOpt(
+        "bin", "Bin length of the link table in seconds (default 900).", "s", "900");
+    const QCommandLineOption threadsOpt(
+        "threads", "Threads for the link table (default: all).", "n", "0");
+
     parser.addOptions({scenarioOpt, forceOpt, typeOpt, bandwidthOpt,
-                       lixelOpt, repeatOpt, gatherOpt});
+                       lixelOpt, repeatOpt, gatherOpt, binOpt, threadsOpt});
     parser.process(app);
 
     const QStringList args = parser.positionalArguments();
@@ -619,6 +1013,8 @@ int main(int argc, char* argv[]) {
         note("No command given.\n");
         parser.showHelp(1);
     }
+
+    if (args.first() == "metrics") return cmdMetrics();
 
     const QString scenario = parser.value(scenarioOpt);
     if (scenario.isEmpty()) {
@@ -635,6 +1031,10 @@ int main(int argc, char* argv[]) {
         return cmdPreprocess(scenario, parser.isSet(forceOpt));
     if (command == "stats")
         return cmdStats(scenario);
+    if (command == "linkbins")
+        return cmdLinkbins(scenario, parser.value(binOpt).toInt(),
+                           std::max(1, parser.value(repeatOpt).toInt()),
+                           parser.value(threadsOpt).toInt());
     if (command == "density")
         return cmdDensity(scenario, parser.value(typeOpt),
                           parser.value(bandwidthOpt).toDouble(),

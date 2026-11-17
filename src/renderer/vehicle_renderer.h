@@ -3,6 +3,7 @@
 #include "gl_renderer.h"
 #include "data/network_index.h"
 #include "data/vehicle_index.h"
+#include <array>
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
@@ -62,6 +63,12 @@ public:
         updateTime(currentTime_);
     }
     VehicleColorMode colorMode() const { return colorMode_; }
+
+    // "By Vehicle Speed": green (free flow) to yellow to red (stopped).
+    // speedRatio = free-flow time / the vehicle's time on its link. Static,
+    // so that the map key draws the same ramp.
+    static void getSpeedColor(float speedRatio, float& r, float& g, float& b);
+
 
     // Set tracked vehicle for highlight (kNoVehicle = none)
     void setTrackedVehicle(uint32_t vehicleId) { trackedVehicleId_ = vehicleId; }
@@ -126,7 +133,6 @@ private:
     float getLinkAngle(uint32_t linkId) const;
 
     // Speed-based color: maps speedRatio (0=stopped, 1=freeflow) to RGB
-    void getSpeedColor(float speedRatio, float& r, float& g, float& b) const;
 
     // Smooth transition helpers
     static float smoothstep(float t);

@@ -8,11 +8,13 @@ compares them with the simulated volumes on the same links.
 1. Open a run.
 2. Click **Home > Load Counts** (Ctrl+Shift+C).
 3. Select a MATSim counts file (`.xml` or `.xml.gz`).
-4. Type the `countsScaleFactor` from the `counts` module of your MATSim
-   `config.xml`. Then click **OK**.
+4. Type the `countsScaleFactor` of the run (the `counts` module of its
+   MATSim config). Then click **OK**. If you entered a sample scale for the
+   link colors before, the box shows that value.
 
 TAREEK-Vis multiplies the simulated volumes by this factor. A simulation of a
-10% sample usually has a factor of 10.
+10% sample usually has a factor of 10. This value is also the sample scale of
+the link colors and charts: you type it one time for a run.
 
 The count stations show in yellow on the map. To hide them, click
 **View > Link Counts**.

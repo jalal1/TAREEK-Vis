@@ -10,6 +10,7 @@
 
 #include "core/transit_types.h"
 #include "parsers/transit_schedule_parser.h"
+#include "analysis/link_metrics.h"
 
 namespace simvis {
 
@@ -76,14 +77,23 @@ public:
         double lengthM = 0.0;
         double freeSpeedMs = 0.0;
         double capacityVehH = 0.0;
-        int lanes = 0;
+        float lanes = 0.0f;
         QString roadType;
         bool hasCounts = false;     // a count station is attached to this link
         QString countStationId;
-        std::vector<uint32_t> hourlyVolumes; // 24 elements representing traffic per hour
+        // Vehicles that entered the link in each hour of the run (at least
+        // 24 hours, not folded at 24:00). Empty until the link table is ready.
+        std::vector<uint32_t> hourlyVolumes;
+        // The sums of the link in each bin of the link table, for the metric
+        // charts (empty until the table is ready)
+        std::vector<LinkSums> binSums;
+        uint32_t binSeconds = 0;
+        linkmetrics::RunFactors runFactors;
+        LinkRecord link{};
         // countsScaleFactor the user supplied with the counts file, or 0 when
         // no counts are loaded and the sample rate is therefore unknown.
         double volumeScaleFactor = 0.0;
+        QString volumeScaleSource;  // where the factor came from
         // Name of the experiment folder, shown on an exported chart.
         QString experimentName;
     };
@@ -100,6 +110,8 @@ signals:
     void passengerClicked(uint32_t personId); // User clicked a passenger in the list
 
 private:
+    // The metric of the link chart that the user chose last (a metric key)
+    QString lastMetricKey_ = QStringLiteral("speed_ratio");
     void clearContent();
     QLabel* addHeader(const QString& text);
     // A header with a button that copies an id (to paste in the search box)

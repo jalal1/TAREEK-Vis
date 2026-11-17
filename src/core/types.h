@@ -6,6 +6,7 @@
 #include <vector>
 #include <unordered_map>
 #include <limits>
+#include <cmath>
 
 namespace simvis {
 
@@ -21,7 +22,10 @@ struct VehicleState;
 // Binary file magic numbers for validation
 constexpr uint32_t NETWORK_FILE_MAGIC = 0x4E455457;  // "NETW"
 // v2: NodeRecord::z (the former padding) holds the node height
-constexpr uint32_t FILE_VERSION = 2;
+// v3: LinkRecord holds the lanes in hundredths (1.5 lanes was cut to 1) and
+// the allowed modes; the header holds the capacity period
+// v4: the road type also comes from osm:way:highway (networks made from OSM)
+constexpr uint32_t FILE_VERSION = 4;
 
 // ============================================================================
 // Coordinate types
@@ -93,12 +97,34 @@ struct LinkRecord {
     uint32_t toNode;      // To node internal ID
     float length;         // Link length in meters
     float freespeed;      // Free flow speed in m/s
-    float capacity;       // Capacity
-    uint8_t lanes;        // Number of lanes (max 255)
+    float capacity;       // Capacity, vehicles per capacity period (see NetworkFileHeader)
+    uint16_t lanesX100;   // Number of lanes x 100. MATSim permlanes is a real number (1.5).
     uint8_t roadType;     // Road type enum
-    uint16_t padding;     // Alignment padding
+    uint8_t modes;        // Allowed modes: LINK_MODE_* bits
+
+    float lanes() const { return static_cast<float>(lanesX100) / 100.0f; }
 };
 static_assert(sizeof(LinkRecord) == 28, "LinkRecord must be 28 bytes");
+
+// Allowed modes of a link, from the MATSim modes attribute (comma list)
+constexpr uint8_t LINK_MODE_CAR   = 1 << 0;  // car
+constexpr uint8_t LINK_MODE_BUS   = 1 << 1;  // bus
+constexpr uint8_t LINK_MODE_PT    = 1 << 2;  // pt (any public transport)
+constexpr uint8_t LINK_MODE_RAIL  = 1 << 3;  // rail, train
+constexpr uint8_t LINK_MODE_TRAM  = 1 << 4;  // tram, light_rail
+constexpr uint8_t LINK_MODE_OTHER = 1 << 5;  // any other mode (bike, artificial, ...)
+
+// The LINK_MODE_* bits of a MATSim modes attribute, for example "bus,car,pt"
+uint8_t parseLinkModes(const std::string& modes);
+
+// MATSim's free-flow time of a link, in seconds: a vehicle leaves in the
+// second after length / free speed (floor + 1). The linkstats show 2.0 s for
+// a link of 1.41 s, so a free-flowing vehicle has no delay with this value.
+// The link colors and the vehicle colors both use it (one convention).
+inline float matsimFreeFlowSeconds(const LinkRecord& link) {
+    if (!(link.freespeed > 0.0f) || !std::isfinite(link.freespeed)) return 0.0f;
+    return std::floor(link.length / link.freespeed) + 1.0f;
+}
 
 // Road types for coloring
 enum class RoadType : uint8_t {
@@ -139,7 +165,7 @@ struct Link {
     double length;
     double freespeed;
     double capacity;
-    uint8_t lanes;
+    double lanes;
     RoadType roadType;
     std::string originalId;
 
@@ -233,6 +259,10 @@ struct NetworkFileHeader {
     uint64_t stringTableOffset;
     uint64_t stringTableSize;
     BoundingBox bounds;
+    // v3: the capacity period of the network (<links capperiod="01:00:00">),
+    // in seconds. 0 = the network has none.
+    uint32_t capPeriodS;
+    uint32_t reserved;
 };
 
 // ============================================================================

@@ -7,10 +7,13 @@ namespace simvis {
 
 RoadType parseRoadType(const std::string& type) {
     if (type == "motorway" || type == "motorway_link") return RoadType::Motorway;
-    if (type == "primary" || type == "primary_link") return RoadType::Primary;
+    // OSM trunk roads (expressways that are not motorways) draw as primary
+    if (type == "primary" || type == "primary_link" ||
+        type == "trunk" || type == "trunk_link") return RoadType::Primary;
     if (type == "secondary" || type == "secondary_link") return RoadType::Secondary;
     if (type == "tertiary" || type == "tertiary_link") return RoadType::Tertiary;
-    if (type == "residential") return RoadType::Residential;
+    if (type == "residential" || type == "unclassified" || type == "living_street")
+        return RoadType::Residential;
     if (type == "service") return RoadType::Service;
     if (type.empty()) return RoadType::Unknown;
     if (type.rfind("air_", 0) == 0) {
@@ -22,6 +25,28 @@ RoadType parseRoadType(const std::string& type) {
         return RoadType::AirOther;
     }
     return RoadType::Other;
+}
+
+uint8_t parseLinkModes(const std::string& modes) {
+    uint8_t bits = 0;
+    size_t start = 0;
+    while (start <= modes.size()) {
+        size_t end = modes.find(',', start);
+        if (end == std::string::npos) end = modes.size();
+        std::string mode = modes.substr(start, end - start);
+        // Trim spaces: "bus, car" is also seen
+        const size_t a = mode.find_first_not_of(' ');
+        const size_t b = mode.find_last_not_of(' ');
+        mode = a == std::string::npos ? std::string() : mode.substr(a, b - a + 1);
+        if (mode == "car") bits |= LINK_MODE_CAR;
+        else if (mode == "bus") bits |= LINK_MODE_BUS;
+        else if (mode == "pt") bits |= LINK_MODE_PT;
+        else if (mode == "rail" || mode == "train") bits |= LINK_MODE_RAIL;
+        else if (mode == "tram" || mode == "light_rail") bits |= LINK_MODE_TRAM;
+        else if (!mode.empty()) bits |= LINK_MODE_OTHER;
+        start = end + 1;
+    }
+    return bits;
 }
 
 EventType parseEventType(const std::string& type) {

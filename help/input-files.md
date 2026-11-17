@@ -21,9 +21,12 @@ TAREEK-Vis reads standard MATSim output files. Each file can be plain XML
 ```
 
 The `coordinateReferenceSystem` attribute is optional. The background map
-needs a CRS. If the network file has no CRS, TAREEK-Vis uses the
-`coordinateSystem` parameter of the MATSim config file (`output_config.xml`
-or `config.xml`) in the folder of the network.
+needs a CRS. If the network file has no CRS, TAREEK-Vis asks for the EPSG
+code when you turn on the background map, and keeps it for the run.
+
+TAREEK-Vis does not read the MATSim config file. A config file next to the
+outputs can be of another run. When TAREEK-Vis needs a value that the output
+files do not have (the CRS, the sample scale), it asks you.
 
 ## Events (required)
 

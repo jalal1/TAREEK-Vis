@@ -3494,8 +3494,8 @@ void MainWindow::onNetworkLinkClicked(uint32_t linkId) {
     // Until the scan finishes, leave hourlyVolumes empty: the panel then omits
     // the chart entirely rather than drawing 24 zeros, which would read as "no
     // traffic on this link" when the truth is "not counted yet".
-    // The hourly volumes use the scale of the run config, as the link colors
-    // do. Without one, the counts scale (if counts are loaded) still counts.
+    // The hourly volumes use the sample scale that the user entered, as the
+    // link colors do. Without one, the values stay those of the sample.
     info.volumeScaleFactor = sampleScale_;
     info.volumeScaleSource = QStringLiteral("sample scale entered for this run");
 

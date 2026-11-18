@@ -298,7 +298,7 @@ bool LinkTimeTable::load(const std::string& path, const Source& source) {
     if (!in || h.magic != kMagic || h.version != kVersion ||
         h.vidxBytes != source.vidxBytes || h.vidxModifiedMs != source.vidxModifiedMs ||
         h.vidxVersion != source.vidxVersion || h.networkHash != source.networkHash ||
-        h.binCount == 0 || h.binCount > 1'000'000) {
+        h.binSeconds == 0 || h.binCount == 0 || h.binCount > 1'000'000) {
         return false;
     }
     std::vector<uint32_t> counts(h.binCount);

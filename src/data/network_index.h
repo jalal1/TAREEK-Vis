@@ -50,6 +50,10 @@ public:
     // Internal id of the link with this MATSim id string, or UINT32_MAX.
     uint32_t findLinkByOriginalId(const std::string& originalId) const;
 
+    // Capacity period of the network in seconds (LinkRecord::capacity is per
+    // this period). 0 = the network file has none.
+    uint32_t capPeriodS() const { return header_.capPeriodS; }
+
     // Stats
     size_t nodeCount() const { return nodes_.size(); }
     size_t linkCount() const { return links_.size(); }

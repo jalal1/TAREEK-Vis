@@ -6,6 +6,7 @@
 #include <QImage>
 #include <QSize>
 #include <memory>
+#include <map>
 
 class QPainter;
 
@@ -20,6 +21,7 @@ class QPainter;
 #include "renderer/air_overlay_renderer.h"
 #include "data/network_index.h"
 #include "data/vehicle_index.h"
+#include "analysis/link_metrics.h"
 
 namespace simvis {
 
@@ -76,7 +78,30 @@ public:
     struct AirStatus { size_t aircraft = 0; size_t losses = 0; size_t holds = 0; };
     AirStatus airStatus() const;
     // Height colour key, bottom right, while aircraft are coloured by height
-    void drawAltitudeLegend(QPainter& painter, const QSize& deviceSize, qreal scale);
+    // Returns the top y of the key, or the height of the device when there is
+    // no key, so that the vehicle key can go above it.
+    int drawAltitudeLegend(QPainter& painter, const QSize& deviceSize, qreal scale);
+    // Key of the vehicle speed colors, bottom left, above the link key.
+    void drawVehicleLegend(QPainter& painter, const QSize& deviceSize, qreal scale, int bottom);
+
+    // Link colors (roadmap item 9). RoadType is the default.
+    void setLinkColorMode(linkmetrics::Mode mode);
+    linkmetrics::Mode linkColorMode() const { return linkColorMode_; }
+    // The per-link time table for the result modes, made on a worker thread.
+    // robustMax: the top of each RobustMax scale (linkmetrics::robustMax).
+    void setLinkTimeTable(std::shared_ptr<const LinkTimeTable> table,
+                          const linkmetrics::RunFactors& factors,
+                          const std::map<linkmetrics::Mode, float>& robustMax);
+    bool hasLinkTimeTable() const { return linkTable_ != nullptr; }
+    // A new sample scale (the user entered it)
+    void setRunFactors(const linkmetrics::RunFactors& factors);
+    // The time window of the result modes, s. startS < 0: the bin of the
+    // current time (the colors follow the timeline).
+    void setLinkTimeWindow(double startS, double endS);
+    // Key of the link colors, bottom left, above the heatmap key. `bottom` is
+    // the lowest y the key can use. Nothing is drawn for RoadType. Returns
+    // its top y (or `bottom` when there is no key).
+    int drawLinkLegend(QPainter& painter, const QSize& deviceSize, qreal scale, int bottom);
 
     // Vehicle rendering options
     void setVehicleSize(float size);
@@ -197,7 +222,9 @@ public:
     // overlay rather than GL, so both the live widget and the off-screen
     // export have to ask for it. `scale` multiplies every size so the key
     // keeps its on-screen proportions in a high-resolution export.
-    void drawHeatmapLegend(QPainter& painter, const QSize& deviceSize, qreal scale);
+    // Returns the top y of the key, or the height of the device when there is
+    // no key, so that the link key can go above it.
+    int drawHeatmapLegend(QPainter& painter, const QSize& deviceSize, qreal scale);
 
 signals:
     void simulationTimeChanged(float time);
@@ -304,6 +331,26 @@ private:
     // Air view settings, kept here so that they survive initializeGL
     bool hasAirVehicles_ = false;
     float airTopHeight_ = 0.0f;
+
+    // Sends the values and classes of linkColorMode_ to the network renderer
+    // (Road Type until the table of a result mode is ready)
+    void applyLinkColors();
+    // True on the light tiles (OSM, topo): Road Type uses dark grays there
+    bool lightLinkBackground() const;
+    // The mode of the colors on the map now (Road Type while a result mode
+    // waits for its table)
+    linkmetrics::Mode shownLinkMode_ = linkmetrics::Mode::RoadType;
+    // The bins [b0, b1) of the current time window
+    void linkWindowBins(uint32_t& b0, uint32_t& b1) const;
+    linkmetrics::Mode linkColorMode_ = linkmetrics::Mode::RoadType;
+    linkmetrics::Classes linkClasses_;          // classes of the current mode
+    std::shared_ptr<const LinkTimeTable> linkTable_;
+    linkmetrics::RunFactors runFactors_;
+    std::map<linkmetrics::Mode, float> robustMax_;
+    double linkWindowStartS_ = -1.0;           // < 0: follow the time
+    double linkWindowEndS_ = -1.0;
+    uint32_t linkTableBin_ = UINT32_MAX;       // first bin of the colors on the map
+    size_t linkNoDataCount_ = 0;   // links with no value in the current mode
     bool showAirLinks_ = false;
     bool showVertiports_ = true;
     bool showTrails_ = true;

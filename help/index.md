@@ -22,6 +22,7 @@ open.
 ## Analyze
 
 - [Road links and hourly volume](road-links.md)
+- [Link colors](link-colors.md)
 - [Compare with traffic counts](counts.md)
 - [Public transit](transit.md)
 - [Air traffic](air-traffic.md)

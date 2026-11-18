@@ -61,7 +61,12 @@ proceedings are published.
 - Click a vehicle to see the trips of its driver, or the passengers of a
   transit vehicle. Show the route of a person on the map.
 - Find a link, a person or a vehicle by its ID.
-- Click a road to see its details and its hourly traffic volume.
+- Click a road to see its details, its hourly traffic volume and its
+  results over the day.
+- Color the roads by their network data (road type, capacity, free speed,
+  lanes, allowed modes) or by simulation results that change as the time
+  moves (flow, speed, delay, density, volume / capacity, delayed vehicles).
+  Each color mode has a legend on the map.
 - Compare simulated volumes with traffic counts. Export the chart of each
   count station and a table of the totals, the ratio and the GEH.
 - Show bus, tram and rail routes and stops.

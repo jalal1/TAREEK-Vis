@@ -26,12 +26,13 @@ set(SOURCES
     src/parsers/preprocessor.cpp
     src/parsers/transit_schedule_parser.cpp
     src/parsers/counts_parser.cpp
-    src/parsers/config_crs.cpp
     src/data/network_index.cpp
     src/data/vehicle_index.cpp
     src/analysis/nkdv_network.cpp
     src/analysis/nkde_scatter.cpp
     src/analysis/heatmap_cache.cpp
+    src/analysis/link_metrics.cpp
+    src/analysis/link_time_table.cpp
     src/renderer/gl_renderer.cpp
     src/renderer/network_renderer.cpp
     src/renderer/vehicle_renderer.cpp
@@ -87,12 +88,13 @@ set(HEADERS
     src/parsers/preprocessor.h
     src/parsers/transit_schedule_parser.h
     src/parsers/counts_parser.h
-    src/parsers/config_crs.h
     src/data/network_index.h
     src/data/vehicle_index.h
     src/analysis/nkdv_network.h
     src/analysis/nkde_scatter.h
     src/analysis/heatmap_cache.h
+    src/analysis/link_metrics.h
+    src/analysis/link_time_table.h
     src/renderer/gl_renderer.h
     src/renderer/network_renderer.h
     src/renderer/vehicle_renderer.h
@@ -104,6 +106,7 @@ set(HEADERS
     src/renderer/heatmap_renderer.h
     src/renderer/air_overlay_renderer.h
     src/renderer/heatmap_palette.h
+    src/renderer/link_palette.h
     src/core/crs_transform.h
     src/ui/main_window.h
     src/ui/map_widget.h
@@ -229,6 +232,8 @@ set(BENCH_SOURCES
     # application ships the scatter form alone.
     src/analysis/nkde_gather.cpp
     src/analysis/heatmap_cache.cpp
+    src/analysis/link_metrics.cpp
+    src/analysis/link_time_table.cpp
     third_party/pugixml.cpp
 )
 

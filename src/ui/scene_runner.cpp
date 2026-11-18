@@ -97,6 +97,9 @@ bool SceneRunner::prepare() {
 }
 
 void SceneRunner::runAll() {
+    // The link table (result color modes) is made or read on a worker thread
+    // after the load. Wait for it, so no timed frame shares the CPU with it.
+    while (window_->linkTableRunning()) wait(0.2);
     for (const QJsonValue& v : scenes_) runScene(v.toObject());
     QApplication::exit(0);
 }
@@ -106,8 +109,9 @@ bool SceneRunner::applyActions(const QJsonObject& actions) {
     bool ok = true;
     for (auto it = actions.begin(); it != actions.end(); ++it) {
         QAction* found = nullptr;
+        const QString key = MainWindow::currentToggleKey(it.key());
         for (QAction* a : all) {
-            if (a->text().remove('&') == it.key() || MainWindow::toggleKey(a) == it.key()) {
+            if (a->text().remove('&') == key || MainWindow::toggleKey(a) == key) {
                 found = a;
                 break;
             }
@@ -140,6 +144,9 @@ void SceneRunner::runScene(const QJsonObject& scene) {
     const QString name = scene.value("name").toString();
     MapWidget* map = window_->mapWidget();
 
+    // "sample_scale": the sample scale of the run (no dialog in a capture)
+    if (scene.contains("sample_scale"))
+        window_->setSampleScaleForCapture(scene.value("sample_scale").toDouble());
     applyActions(scene.value("actions").toObject());
 
     // "counts": {"file": path, "scale": countsScaleFactor}

@@ -401,7 +401,7 @@ void VehicleRenderer::setVehicleIndex(VehicleIndex* index) {
 // Speed-based color helper function
 // ============================================================================
 
-void VehicleRenderer::getSpeedColor(float speedRatio, float& r, float& g, float& b) const {
+void VehicleRenderer::getSpeedColor(float speedRatio, float& r, float& g, float& b) {
     // speedRatio: 0.0 = stopped, 1.0 = full speed (freeflow)
     speedRatio = std::clamp(speedRatio, 0.0f, 1.0f);
 
@@ -485,7 +485,8 @@ void VehicleRenderer::updateTime(float simulationTime) {
         float speedRatio = 1.0f;
         const LinkRecord* link = networkIndex_->getLink(seg->linkId);
         if (link && link->freespeed > 0 && duration > 0) {
-            float freeflowTimeMs = (link->length / link->freespeed) * 1000.0f;
+            // MATSim's free-flow time (floor + 1 s), as the link colors use
+            float freeflowTimeMs = matsimFreeFlowSeconds(*link) * 1000.0f;
             speedRatio = std::clamp(freeflowTimeMs / duration, 0.0f, 1.0f);
         }
 

@@ -26,8 +26,8 @@ The symbol moves up the screen by its height. Thus:
 
 A vertiport shows as a helipad mark (a circle with an "H").
 
-The color shows the height when **Color** in **View > Vehicle Style** is
-**By Speed**. With
+The color shows the height when **View > Links > Color by > By Vehicle
+Speed** is selected. With
 **By Mode (Icons)**, an aircraft shows as a helicopter icon.
 
 ## Change the air view

@@ -19,6 +19,7 @@ public:
         StringInterner linkIds;
         BoundingBox bounds;
         std::string crs;  // e.g. "EPSG:26915" from coordinateReferenceSystem attribute
+        uint32_t capPeriodS = 0;  // <links capperiod="01:00:00">, s; 0 = none
         bool success = false;
         std::string errorMessage;
     };

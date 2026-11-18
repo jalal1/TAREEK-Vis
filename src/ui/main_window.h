@@ -1,5 +1,9 @@
 #pragma once
 
+#include "analysis/link_metrics.h"
+#include "analysis/link_time_table.h"
+#include <map>
+#include <memory>
 #include <QMainWindow>
 #include <QLabel>
 #include <QAction>
@@ -39,17 +43,19 @@ class ViewsPanel;
 class LoadingIndicator;
 class UpdateChecker;
 
-// Hourly traffic for every link: 24 counts per link, laid end to end and
-// indexed by link id (ids are interned sequentially from 0). A flat array
-// rather than a map of vectors - one allocation instead of one per link, and
-// the scan is roughly ten times faster on a large scenario.
-struct LinkHourlyVolumes {
-    std::vector<uint32_t> hours;
-    // Which load this result describes. A scan that lands after the user has
-    // already loaded another scenario is discarded on this stamp.
+// The per-link time table (analysis/link_time_table.h) of a run, made or read
+// from the cache on a worker thread. The link colors, the hourly volume chart
+// and the metric charts of the info panel all read this one table.
+struct LinkTableResult {
+    std::shared_ptr<const LinkTimeTable> table;
+    std::map<linkmetrics::Mode, float> robustMax;  // top of each RobustMax scale
+    // Which load this result describes. A result that lands after the user
+    // has loaded another run is discarded on this stamp.
     uint64_t generation = 0;
-
-    bool empty() const { return hours.empty(); }
+    bool fromCache = false;
+    double tableSeconds = 0.0;    // build or read time
+    double robustSeconds = 0.0;   // time for the robust maxima
+    QString error;
 };
 
 class MainWindow : public QMainWindow {
@@ -94,6 +100,10 @@ public:
         onHeatmapTypeSelected(activityType);
     }
     bool heatmapRunning() const { return heatmapRunning_; }
+    // The per-link time table is being made or read (scene capture waits)
+    bool linkTableRunning() const { return linkTableRunning_; }
+    // Scene capture: the sample scale, with no dialog and no file
+    void setSampleScaleForCapture(double scale) { setSampleScale(scale, false); }
     // Load a counts file and multiply the simulated volumes by scaleFactor
     bool loadCounts(const QString& path, double scaleFactor);
     // Click the count station on this link. Returns its chart window, or
@@ -108,6 +118,8 @@ public:
     // The key of a toggle in a view: its text without '&' and without a
     // count at the end, so "Air taxi (1660)" is the same toggle in each run
     static QString toggleKey(const QAction* action);
+    // The current name of a toggle key from an older view or scene file
+    static QString currentToggleKey(const QString& key);
 
 signals:
     // A run is loaded and on the map (from the cache or after preprocessing)
@@ -310,6 +322,9 @@ private:
     // File, navigation and playback actions
     QAction* openFolderAction_ = nullptr;
     QAction* openFilesAction_ = nullptr;
+    // The cache check found a network .bin of an older format and a valid
+    // .vidx: the load makes the .bin again from the XML (see loadBinaryFiles)
+    bool networkBinOutdated_ = false;
     // Preprocess the open run again, in place of deleting .simvis_cache
     QAction* rebuildCacheAction_ = nullptr;
     // True while that runs. If it fails or is cancelled, the cache from
@@ -347,6 +362,10 @@ private:
     QMenu* vehicleShapeMenu_ = nullptr;
     QMenu* vehicleSizeMenu_ = nullptr;
     QMenu* vehicleColorMenu_ = nullptr;
+    QMenu* linkColorMenu_ = nullptr;     // View > Links > Color by
+    QMenu* linkTimeMenu_ = nullptr;      // View > Links > Time
+    QList<QAction*> linkResultActions_;  // result modes: enabled with the link table
+    QString lastLinkWindowText_ = QStringLiteral("07:00 to 09:00");
     QMenu* otherModesMenu_ = nullptr;
     QAction* showAirLinksAction_ = nullptr;
     QAction* showVertiportsAction_ = nullptr;
@@ -450,7 +469,14 @@ private:
     // just loaded has none, so old tiles do not stay under a network they do
     // not match.
     // If the network gave no CRS, take it from the run's MATSim config
-    void useRunConfigCrs();
+    // Ask the user for the EPSG code when the network has no CRS (for the
+    // background map). True when a valid CRS was entered.
+    bool askForCrs();
+    // The sample scale of the run (sample_scale.txt in the cache folder)
+    QString sampleScalePath() const;
+    void readSampleScale();
+    void setSampleScale(double scale, bool save);
+    bool askSampleScale();
     void checkBackgroundMapCrs();
 
     // Close the side panel and drop the inspected link with it
@@ -587,12 +613,20 @@ private:
     static constexpr uint32_t kNoLink = UINT32_MAX;
     uint32_t selectedLinkId_ = kNoLink;
 
-    // Per-link hourly traffic, 24 counts per link laid end to end and indexed
-    // by link id. Filled by a worker thread; empty until that finishes.
-    LinkHourlyVolumes linkHourlyVolumes_;
-    bool linkHourlyVolumesReady_ = false;
+    // The per-link time table of the run. Null until the worker is done.
+    std::shared_ptr<const LinkTimeTable> linkTable_;
     uint64_t volumeGeneration_ = 0;
-    QFutureWatcher<LinkHourlyVolumes> volumeWatcher_;
+    bool linkTableRunning_ = false;
+    QFutureWatcher<LinkTableResult> volumeWatcher_;
+    // The sample scale of the run (10 for a 10 % sample), as the user entered
+    // it (Color By > Sample Scale..., or Load Counts). 0 = not known.
+    // TAREEK-Vis reads no MATSim config file: a config next to the outputs
+    // can be of another run.
+    double sampleScale_ = 0.0;
+    bool sampleScaleAsked_ = false;
+    QAction* sampleScaleAction_ = nullptr;
+    // The scale and capacity period that the link metrics need
+    linkmetrics::RunFactors runFactors() const;
 
     // Throttle for live vehicle-info panel refresh (sim seconds of last update)
     float lastVehicleInfoRefreshTime_ = -1.0f;

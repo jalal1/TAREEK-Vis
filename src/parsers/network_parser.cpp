@@ -1,4 +1,6 @@
 #include "network_parser.h"
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <cstring>
@@ -68,6 +70,27 @@ std::string getAttr(const std::string& line, const std::string& name) {
     return line.substr(pos, end - pos);
 }
 
+// "01:00:00" (or "3600") to seconds. 0 when the value is empty or bad.
+uint32_t parseCapPeriod(const std::string& text) {
+    if (text.empty()) return 0;
+    try {
+        if (text.find(':') == std::string::npos) {
+            return static_cast<uint32_t>(std::max(0.0, std::stod(text)));
+        }
+        double total = 0.0;
+        size_t start = 0;
+        while (start <= text.size()) {
+            size_t end = text.find(':', start);
+            if (end == std::string::npos) end = text.size();
+            total = total * 60.0 + std::stod(text.substr(start, end - start));
+            start = end + 1;
+        }
+        return static_cast<uint32_t>(std::max(0.0, total));
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
 } // anonymous namespace
 
 NetworkParser::Result NetworkParser::parseGzipFile(const std::string& path, ProgressCallback progress) {
@@ -108,6 +131,11 @@ NetworkParser::Result NetworkParser::parseGzipFile(const std::string& path, Prog
                 }
             }
 
+            // Capacity period: <links capperiod="01:00:00" ...>
+            if (result.capPeriodS == 0 && line.find("<links") != std::string::npos) {
+                result.capPeriodS = parseCapPeriod(getAttr(line, "capperiod"));
+            }
+
             // Parse node
             if (line.find("<node ") != std::string::npos) {
                 std::string id = getAttr(line, "id");
@@ -141,6 +169,8 @@ NetworkParser::Result NetworkParser::parseGzipFile(const std::string& path, Prog
                 std::string freespeedStr = getAttr(line, "freespeed");
                 std::string capacityStr = getAttr(line, "capacity");
                 std::string lanesStr = getAttr(line, "permlanes");
+                // The leading space keeps "allowedModes"-like names from matching
+                std::string modesStr = getAttr(line, " modes");
 
                 if (!id.empty() && !from.empty() && !to.empty()) {
                     LinkRecord rec;
@@ -162,24 +192,36 @@ NetworkParser::Result NetworkParser::parseGzipFile(const std::string& path, Prog
                     rec.length = lengthStr.empty() ? 0.0f : static_cast<float>(std::stod(lengthStr));
                     rec.freespeed = freespeedStr.empty() ? 13.89f : static_cast<float>(std::stod(freespeedStr));
                     rec.capacity = capacityStr.empty() ? 1000.0f : static_cast<float>(std::stod(capacityStr));
-                    rec.lanes = lanesStr.empty() ? 1 : static_cast<uint8_t>(std::stod(lanesStr));
+                    {
+                        const double lanes = lanesStr.empty() ? 1.0 : std::stod(lanesStr);
+                        rec.lanesX100 = static_cast<uint16_t>(
+                            std::clamp(std::lround(lanes * 100.0), 0L, 65535L));
+                    }
+                    rec.modes = parseLinkModes(modesStr);
 
                     // Get road type from nested attribute (simplified - may need multi-line parsing)
                     rec.roadType = static_cast<uint8_t>(RoadType::Unknown);
-                    rec.padding = 0;
 
                     result.links.push_back(rec);
                     linkCount++;
                 }
             }
-            // Check for road type in attribute line
-            else if (line.find("name=\"type\"") != std::string::npos && !result.links.empty()) {
-                // Extract type value - format: <attribute name="type" class="...">value</attribute>
+            // Road type of the last link, from an attribute line:
+            // <attribute name="type" class="...">value</attribute>, or, in a
+            // network made from OpenStreetMap (pt2matsim, the TAREEK
+            // pipeline), <attribute name="osm:way:highway" ...>value</attribute>.
+            // "type" wins when a link has both, in either order.
+            else if (!result.links.empty() &&
+                     (line.find("name=\"type\"") != std::string::npos ||
+                      line.find("name=\"osm:way:highway\"") != std::string::npos)) {
+                const bool isType = line.find("name=\"type\"") != std::string::npos;
+                LinkRecord& link = result.links.back();
                 size_t start = line.find('>');
                 size_t end = line.find('<', start + 1);
-                if (start != std::string::npos && end != std::string::npos) {
+                if (start != std::string::npos && end != std::string::npos &&
+                    (isType || link.roadType == static_cast<uint8_t>(RoadType::Unknown))) {
                     std::string typeVal = line.substr(start + 1, end - start - 1);
-                    result.links.back().roadType = static_cast<uint8_t>(parseRoadType(typeVal));
+                    link.roadType = static_cast<uint8_t>(parseRoadType(typeVal));
                 }
             }
         }
@@ -226,6 +268,8 @@ bool NetworkParser::writeBinary(const std::string& path, const Result& data) {
     header.nodeCount = static_cast<uint32_t>(data.nodes.size());
     header.linkCount = static_cast<uint32_t>(data.links.size());
     header.bounds = data.bounds;
+    header.capPeriodS = data.capPeriodS;
+    header.reserved = 0;
 
     // Calculate offsets
     size_t currentOffset = sizeof(NetworkFileHeader);

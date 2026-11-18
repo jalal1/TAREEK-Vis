@@ -46,6 +46,21 @@ bool Preprocessor::hasCachedFiles() const {
            VehicleIndex::fileVersion(vehicleIndexPath()) == VIDX_FILE_VERSION;
 }
 
+bool Preprocessor::rebuildNetworkBinary(const QString& networkXml, const QString& binPath) {
+    LOG_INFO(QString("Preprocessor: network .bin only, from %1").arg(networkXml));
+    const auto result = NetworkParser::parseGzipFile(networkXml.toStdString());
+    if (!result.success) {
+        LOG_ERROR(QString("Preprocessor: network parse failed - %1")
+            .arg(QString::fromStdString(result.errorMessage)));
+        return false;
+    }
+    if (!NetworkParser::writeBinary(binPath.toStdString(), result)) {
+        LOG_ERROR(QString("Preprocessor: cannot write %1").arg(binPath));
+        return false;
+    }
+    return true;
+}
+
 QString Preprocessor::networkBinaryPath() const {
     if (outputDir_.isEmpty() || networkXmlPath_.isEmpty()) return QString();
 

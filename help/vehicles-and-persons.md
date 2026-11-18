@@ -28,16 +28,28 @@ Use the **View > Vehicle Style** group:
 |--------|---------|
 | Shape | Auto (by mode), Circle, Triangle (Arrow), Rectangle, Diamond. Auto is the default. |
 | Size | Small (3 px), Medium (5 px), Large (8 px). Large is the default. |
-| Color | By Speed (the default) or By Mode (icons). |
 
-With **By Speed**, the color shows the speed of the vehicle as a part of the
-free speed of its link:
+To change the vehicle colors, click **View > Links > Color by**. In the
+**Vehicles** part of the menu, select:
+
+- **By Vehicle Speed** (the default). The color shows the speed of the
+  vehicle on its link as a part of the free speed.
+- **By Mode (Icons)**. Each vehicle shows as an icon of its mode.
+
+With **By Vehicle Speed**, the speed is the free-flow time of the link
+divided by the time that the vehicle takes on the link. The free-flow time
+is the time that MATSim gives a free vehicle: the length divided by the free
+speed, rounded down to a full second, plus one second. Thus a vehicle with
+no delay is green, also on a short link.
 
 | Speed | Color |
 |-------|-------|
 | 80% to 100% of free speed | Green |
 | 40% to 80% | Green to yellow |
 | Less than 40% | Yellow to red |
+
+A key at the bottom left of the map shows these colors. When the links are
+colored too, the vehicle key is above the link key.
 
 ## Examine a vehicle
 

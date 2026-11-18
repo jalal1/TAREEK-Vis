@@ -26,18 +26,16 @@ Use the **View > Layers** group:
 | Link Counts | The count stations. Available after you load counts. |
 | Info Panel | The Info page of the side panel. |
 
-The color of a link shows its road type. The road type comes from the `type`
-attribute of the link, for example `motorway` or `primary`. Links without
-this attribute are gray.
+By default, the gray level and the width of a link show its road type. A
+motorway is the widest line, and a residential road is the thinnest. On the
+dark map, an important road is lighter. On the OpenStreetMap and Topo maps,
+it is darker. The road type comes from the `type` attribute of the link, for
+example `motorway` or `primary`, or from `osm:way:highway`. Links with no
+road type (usually pt and rail) are thin and dim. See the table in
+[Link colors](link-colors.md#road-type).
 
-| Road type | Color |
-|-----------|-------|
-| Motorway | Red |
-| Primary | Orange |
-| Secondary | Yellow |
-| Tertiary | Light gray |
-| Residential | Gray |
-| Service | Dark gray |
+To color the links by capacity, speed, flow or other values, see
+[Link colors](link-colors.md).
 
 ## Background map
 
@@ -48,9 +46,9 @@ this attribute are gray.
 - The background map needs the coordinate reference system (CRS) of the
   network, for example `EPSG:26915`. TAREEK-Vis finds the CRS in the
   `coordinateReferenceSystem` attribute of the network file. If the network
-  file has no CRS, TAREEK-Vis uses the `coordinateSystem` parameter of the
-  MATSim config file (`output_config.xml` or `config.xml`) in the folder of
-  the network.
+  file has no CRS, TAREEK-Vis asks you for the EPSG code (for example
+  `EPSG:26915`) when you turn on the background map, and keeps it for the
+  run.
 - The map tiles come from the internet. TAREEK-Vis keeps up to 300 MB of
   tiles in `%LOCALAPPDATA%\TAREEK-Vis\TAREEK-Vis\cache\tiles`. Areas that you saw before
   load fast, also after a restart.

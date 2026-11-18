@@ -23,7 +23,8 @@ class MainWindow;
 // "m_per_px", "actions",
 // "track", "find", "counts" {"file", "scale"}, "select" (link ids),
 // "fill" {placeholder: text}, "heatmap" (activity type), "wait_s",
-// "scale", "panel" (side panel image scale), "count_chart" (link id).
+// "scale", "panel" (side panel image scale), "count_chart" (link id),
+// "sample_scale" (the sample scale of the run, for the link colors).
 class SceneRunner : public QObject {
     Q_OBJECT
 

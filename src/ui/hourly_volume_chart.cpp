@@ -9,6 +9,7 @@
 #include <QFontMetrics>
 #include <QToolTip>
 #include <algorithm>
+#include <cmath>
 
 namespace simvis {
 namespace {
@@ -27,13 +28,27 @@ constexpr int kMinorTick = 2;
 constexpr int kYTicks = 4;
 
 // Round the axis top up to something a reader can divide by eye, matching the
-// steps CountsChartWidget uses.
-uint32_t niceAxisMax(uint32_t peak) {
-    if (peak == 0) return 10;
-    if (peak <= 100) return ((peak / 10) + 1) * 10;
-    if (peak <= 1000) return ((peak / 100) + 1) * 100;
-    if (peak <= 10000) return ((peak / 1000) + 1) * 1000;
-    return ((peak / 5000) + 1) * 5000;
+// steps CountsChartWidget uses for whole numbers.
+double niceAxisMax(double peak, bool whole) {
+    if (whole) {
+        const uint32_t p = static_cast<uint32_t>(std::ceil(peak));
+        if (p == 0) return 10;
+        if (p <= 100) return ((p / 10) + 1) * 10;
+        if (p <= 1000) return ((p / 100) + 1) * 100;
+        if (p <= 10000) return ((p / 1000) + 1) * 1000;
+        return ((p / 5000) + 1) * 5000;
+    }
+    if (!(peak > 0.0)) return 1.0;
+    // 1, 2, 2.5, 4 or 5 times a power of 10: each divides into kYTicks steps
+    const double pow10 = std::pow(10.0, std::floor(std::log10(peak)));
+    for (double f : {1.0, 2.0, 2.5, 4.0, 5.0, 10.0})
+        if (f * pow10 >= peak) return f * pow10;
+    return 10.0 * pow10;
+}
+
+QString axisNumber(double v, bool whole) {
+    if (whole || std::abs(v - std::round(v)) < 1e-9) return QString::number(std::llround(v));
+    return QString::number(v, 'g', 3);
 }
 
 // Numbers go on even hours: every second hour, or every fourth or sixth where
@@ -57,27 +72,53 @@ HourlyVolumeChart::HourlyVolumeChart(QWidget* parent)
 }
 
 void HourlyVolumeChart::setVolumes(const std::vector<uint32_t>& volumes) {
-    if (volumes.size() != 24) {
-        volumes_.clear();
-        maxVolume_ = 0;
-    } else {
-        volumes_ = volumes;
-        maxVolume_ = *std::max_element(volumes_.begin(), volumes_.end());
-    }
+    values_.assign(volumes.begin(), volumes.end());
+    maxValue_ = values_.empty() ? 0.0 : *std::max_element(values_.begin(), values_.end());
+    slotSeconds_ = 3600;
+    unit_.clear();
+    decimals_ = 0;
+    volumes_ = true;
+    referenceValue_ = 0.0;
     hoverHour_ = -1;
     update();
+}
+
+void HourlyVolumeChart::setSeries(const std::vector<double>& values, int slotSeconds,
+                                  const QString& unit, int decimals, double referenceValue) {
+    values_ = values;
+    maxValue_ = referenceValue;
+    for (double v : values_)
+        if (std::isfinite(v)) maxValue_ = std::max(maxValue_, v);
+    slotSeconds_ = std::max(60, slotSeconds);
+    unit_ = unit;
+    decimals_ = decimals;
+    volumes_ = false;
+    referenceValue_ = referenceValue;
+    hoverHour_ = -1;
+    update();
+}
+
+int HourlyVolumeChart::slotCount() const {
+    // At least one day, so a short run still reads as a day
+    const int day = 86400 / slotSeconds_;
+    return std::max(static_cast<int>(values_.size()), day);
+}
+
+double HourlyVolumeChart::hours() const {
+    return static_cast<double>(slotCount()) * slotSeconds_ / 3600.0;
 }
 
 QSize HourlyVolumeChart::sizeHint() const {
     return QSize(240, 200);
 }
 
-int HourlyVolumeChart::hourAt(int x) const {
+int HourlyVolumeChart::slotAt(int x) const {
     const int plotW = width() - kMarginLeft - kMarginRight;
-    if (volumes_.size() != 24 || plotW <= 0) return -1;
+    if (values_.empty() || plotW <= 0) return -1;
     if (x < kMarginLeft || x >= kMarginLeft + plotW) return -1;
-    const int hour = (x - kMarginLeft) * 24 / plotW;
-    return std::clamp(hour, 0, 23);
+    const int n = slotCount();
+    const int slot = (x - kMarginLeft) * n / plotW;
+    return std::clamp(slot, 0, n - 1);
 }
 
 // Colors for one rendering. The panel is dark; an exported file goes on white
@@ -102,14 +143,14 @@ const HourlyVolumeChart::Colors& paperColors();
 } // namespace
 
 void HourlyVolumeChart::paintEvent(QPaintEvent* /*event*/) {
-    if (volumes_.size() != 24) return;
+    if (values_.empty()) return;
     QPainter p(this);
     paintChart(p, rect(), screenColors(), hoverHour_, false);
 }
 
 void HourlyVolumeChart::paintChart(QPainter& p, const QRect& area, const Colors& c,
                                    int hoverHour, bool withTitle) const {
-    if (volumes_.size() != 24) return;
+    if (values_.empty()) return;
 
     p.save();
     p.setRenderHint(QPainter::Antialiasing);
@@ -149,8 +190,11 @@ void HourlyVolumeChart::paintChart(QPainter& p, const QRect& area, const Colors&
 
     const QFontMetrics fm(tickFont);
     const int plotW = areaW - kMarginLeft - kMarginRight;
-    const double slotW = static_cast<double>(plotW) / 24.0;
-    const int step = labelStep(fm, slotW);
+    const int n = slotCount();
+    const int nHours = static_cast<int>(std::ceil(hours()));
+    const double slotW = static_cast<double>(plotW) / n;
+    const double hourW = slotW * 3600.0 / slotSeconds_;
+    const int step = labelStep(fm, hourW);
     const int labelRowH = fm.height();
     const int hourLabelBand = labelRowH + kMajorTick + 2;
 
@@ -158,7 +202,7 @@ void HourlyVolumeChart::paintChart(QPainter& p, const QRect& area, const Colors&
     if (plotW < 60 || plotH < 40) { p.restore(); return; }
 
     const int baseline = top + plotH;
-    const uint32_t axisMax = niceAxisMax(maxVolume_);
+    const double axisMax = niceAxisMax(maxValue_, volumes_);
 
     // Horizontal grid with its value, so bar heights can be read off
     for (int i = 0; i <= kYTicks; ++i) {
@@ -169,32 +213,41 @@ void HourlyVolumeChart::paintChart(QPainter& p, const QRect& area, const Colors&
         p.setPen(c.value);
         p.drawText(0, y - 7, kMarginLeft - 4, 14,
                    Qt::AlignRight | Qt::AlignVCenter,
-                   QString::number(static_cast<uint32_t>(i) * axisMax / kYTicks));
+                   axisNumber(axisMax * i / kYTicks, volumes_));
     }
 
-    const double barW = std::max(2.0, slotW * 0.74);
+    const double barW = std::max(1.0, slotW * (volumes_ ? 0.74 : 0.85));
     const QColor barColor(panelstyle::kAccent);
     const QColor hoverColor = barColor.lighter(135);
 
-    auto centreOf = [&](int h) { return kMarginLeft + (h + 0.5) * slotW; };
+    // Every slot keeps its place. A slot with no value (or 0 vehicles) draws
+    // no bar, which is what an empty slot should look like.
+    for (int k = 0; k < static_cast<int>(values_.size()); ++k) {
+        const double v = values_[k];
+        if (!std::isfinite(v) || v <= 0.0) continue;
+        const double barX = kMarginLeft + k * slotW + (slotW - barW) / 2.0;
+        const double barH = std::min(1.0, v / axisMax) * plotH;
+        p.fillRect(QRectF(barX, baseline - barH, barW, barH),
+                   k == hoverHour ? hoverColor : barColor);
+    }
 
-    for (int h = 0; h < 24; ++h) {
-        const double barX = kMarginLeft + h * slotW + (slotW - barW) / 2.0;
-        const bool hot = (h == hoverHour);
+    // A reference line, for example v/c = 1
+    if (referenceValue_ > 0.0 && referenceValue_ <= axisMax) {
+        const double y = baseline - referenceValue_ / axisMax * plotH;
+        QPen pen(c.value, 1, Qt::DashLine);
+        p.setPen(pen);
+        p.drawLine(QPointF(kMarginLeft, y), QPointF(kMarginLeft + plotW, y));
+    }
 
-        // Every hour keeps its slot. An hour with no traffic simply draws no
-        // bar, which is what an empty hour should look like.
-        if (volumes_[h] > 0) {
-            const double barH =
-                static_cast<double>(volumes_[h]) / axisMax * plotH;
-            p.fillRect(QRectF(barX, baseline - barH, barW, barH),
-                       hot ? hoverColor : barColor);
-        }
-
+    // A tick at each hour: long where the hour has a number. With hourly bars
+    // the tick is at the middle of the bar, else at the start of the hour.
+    const bool hourly = slotSeconds_ == 3600;
+    auto hourX = [&](int h) { return kMarginLeft + h * hourW + (hourly ? hourW / 2.0 : 0.0); };
+    const int hotHour = hoverHour >= 0 ? hoverHour * slotSeconds_ / 3600 : -1;
+    for (int h = 0; h <= nHours - (hourly ? 1 : 0); ++h) {
         const int len = (h % step == 0) ? kMajorTick : kMinorTick;
-        p.setPen(QPen(hot ? c.tickHot : c.tick, 1));
-        p.drawLine(QPointF(centreOf(h), baseline + 1),
-                   QPointF(centreOf(h), baseline + 1 + len));
+        p.setPen(QPen(h == hotHour ? c.tickHot : c.tick, 1));
+        p.drawLine(QPointF(hourX(h), baseline + 1), QPointF(hourX(h), baseline + 1 + len));
     }
 
     // Hour numbers, one row, starting from 0. The hour under the cursor is
@@ -202,22 +255,22 @@ void HourlyVolumeChart::paintChart(QPainter& p, const QRect& area, const Colors&
     // run into steps aside while it is shown.
     auto labelRect = [&](int h) {
         const double w = fm.horizontalAdvance(QString::number(h));
-        return QRectF(centreOf(h) - w / 2.0, baseline + kMajorTick + 2, w, labelRowH);
+        return QRectF(hourX(h) - w / 2.0, baseline + kMajorTick + 2, w, labelRowH);
     };
 
     std::vector<int> numbered;
-    for (int h = 0; h < 24; h += step) numbered.push_back(h);
+    for (int h = 0; h <= nHours - (hourly ? 1 : 0); h += step) numbered.push_back(h);
 
-    if (hoverHour >= 0 && hoverHour % step != 0) {
-        const QRectF hotRect = labelRect(hoverHour).adjusted(-3, 0, 3, 0);
+    if (hotHour >= 0 && hotHour % step != 0) {
+        const QRectF hotRect = labelRect(hotHour).adjusted(-3, 0, 3, 0);
         numbered.erase(std::remove_if(numbered.begin(), numbered.end(),
                                       [&](int h) { return labelRect(h).intersects(hotRect); }),
                        numbered.end());
-        numbered.push_back(hoverHour);
+        numbered.push_back(hotHour);
     }
 
     for (int h : numbered) {
-        p.setPen(h == hoverHour ? c.valueHot : c.value);
+        p.setPen(h == hotHour ? c.valueHot : c.value);
         p.drawText(labelRect(h).adjusted(-4, 0, 4, 0),
                    Qt::AlignHCenter | Qt::AlignVCenter, QString::number(h));
     }
@@ -231,7 +284,7 @@ void HourlyVolumeChart::paintChart(QPainter& p, const QRect& area, const Colors&
     p.setFont(captionFont);
     p.setPen(c.caption);
     p.drawText(kMarginLeft, baseline + hourLabelBand, plotW, kAxisCaptionBand,
-               Qt::AlignHCenter | Qt::AlignVCenter, tr("Hour of Day"));
+               Qt::AlignHCenter | Qt::AlignVCenter, tr("Hour"));
 
     p.restore();
 }
@@ -244,14 +297,14 @@ void HourlyVolumeChart::setExportInfo(const QString& title, const QString& subti
 }
 
 void HourlyVolumeChart::contextMenuEvent(QContextMenuEvent* event) {
-    if (volumes_.size() != 24) return;
+    if (values_.empty()) return;
     QMenu menu(this);
     menu.addAction(tr("Export chart..."), this, &HourlyVolumeChart::exportChart);
     menu.exec(event->globalPos());
 }
 
 void HourlyVolumeChart::exportChart() {
-    if (volumes_.size() != 24) return;
+    if (values_.empty()) return;
     // A fixed page size, so every exported chart has the same shape and two of
     // them can sit side by side in a report.
     ScreenshotExporter::exportDrawing(
@@ -296,24 +349,33 @@ const HourlyVolumeChart::Colors& paperColors() {
 } // namespace
 
 void HourlyVolumeChart::mouseMoveEvent(QMouseEvent* event) {
-    const int hour = hourAt(event->pos().x());
-    if (hour != hoverHour_) {
-        hoverHour_ = hour;
+    const int slot = slotAt(event->pos().x());
+    if (slot != hoverHour_) {
+        hoverHour_ = slot;
         update();
     }
-    if (hour >= 0) {
+    if (slot >= 0) {
         // Spell out the clock range, so the hour numbering cannot be misread:
         // "Hour 7" alone leaves it open whether that means 7:00 or 7:00-8:00.
-        const uint32_t v = volumes_[hour];
+        // Times after 24:00 are not wrapped: "25:00-26:00", not a range that
+        // runs backwards.
+        auto clock = [](int seconds) {
+            return QString("%1:%2").arg(seconds / 3600, 2, 10, QChar('0'))
+                                   .arg((seconds % 3600) / 60, 2, 10, QChar('0'));
+        };
+        const double v = slot < static_cast<int>(values_.size()) ? values_[slot] : 0.0;
+        QString value;
+        if (volumes_) {
+            const int n = static_cast<int>(std::llround(v));
+            value = n == 0 ? tr("No vehicles") : tr("%n vehicle(s)", nullptr, n);
+        } else if (!std::isfinite(v)) {
+            value = tr("No value (no vehicles)");
+        } else {
+            value = QString::number(v, 'f', decimals_) + (unit_.isEmpty() ? QString() : " " + unit_);
+        }
         QToolTip::showText(
             event->globalPosition().toPoint(),
-            tr("%1:00-%2:00\n%3")
-                .arg(hour, 2, 10, QChar('0'))
-                // The last bar ends at 24:00, not 00:00: wrapping it to midnight
-                // reads as a range running backwards.
-                .arg(hour + 1, 2, 10, QChar('0'))
-                .arg(v == 0 ? tr("No vehicles")
-                            : tr("%n vehicle(s)", nullptr, static_cast<int>(v))),
+            tr("%1-%2\n%3").arg(clock(slot * slotSeconds_), clock((slot + 1) * slotSeconds_), value),
             this);
     } else {
         QToolTip::hideText();

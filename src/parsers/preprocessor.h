@@ -28,6 +28,12 @@ public:
     // Check if cached binary files exist and are valid
     bool hasCachedFiles() const;
 
+    // Writes the network .bin again from the network XML. Use it when only the
+    // .bin is of an older format: the link ids come from the order of the links
+    // in the XML, so a valid .vidx of the same run stays valid, and the events
+    // (minutes on a large run) are not read again.
+    static bool rebuildNetworkBinary(const QString& networkXml, const QString& binPath);
+
     // Get output paths
     QString networkBinaryPath() const;
     QString vehicleIndexPath() const;

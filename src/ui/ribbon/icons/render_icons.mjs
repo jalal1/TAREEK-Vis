@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Render the ribbon icons in svg/ to PNG files and write ribbon_icons.qrc.
 //
 // The app does not use the Qt SVG module, so the icons ship as PNG files at

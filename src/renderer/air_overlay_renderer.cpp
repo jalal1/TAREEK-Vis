@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "air_overlay_renderer.h"
 #include "vehicle_renderer.h"
 #include <algorithm>

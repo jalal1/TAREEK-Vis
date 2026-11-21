@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "transit_route_renderer.h"
 #include <QDebug>
 #include <unordered_map>

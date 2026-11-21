@@ -61,7 +61,7 @@ FFmpeg is a trademark of Fabrice Bellard. If FFmpeg is bundled with this
 application, its license terms apply to the FFmpeg binary only, not to TAREEK-Vis.
 Prebuilt releases bundle the gyan.dev "essentials" build, which includes
 GPL-licensed components (e.g. libx264); this is compatible with TAREEK-Vis's
-own GPLv3 license. An LGPL-only FFmpeg build may be substituted if a less
+own GPL-3.0-or-later license. An LGPL-only FFmpeg build may be substituted if a less
 restrictive redistribution is needed.
 
 ---

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Headless benchmark driver for TAREEK-Vis.
 //
 // The application proper is an interactive Qt/OpenGL desktop tool, which makes

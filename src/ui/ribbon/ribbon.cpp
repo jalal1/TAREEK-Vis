@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "ribbon.h"
 #include "ui/panel_style.h"
 #include <QAction>

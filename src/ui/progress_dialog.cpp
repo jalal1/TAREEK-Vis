@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "progress_dialog.h"
 #include "panel_style.h"
 #include "ribbon/ribbon.h"

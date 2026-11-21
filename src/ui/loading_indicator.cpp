@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "loading_indicator.h"
 #include "panel_style.h"
 #include "ribbon/ribbon.h"

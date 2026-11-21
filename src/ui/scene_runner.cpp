@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "scene_runner.h"
 #include "main_window.h"
 #include "core/logger.h"

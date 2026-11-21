@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "nkdv_network.h"
 
 #include "core/logger.h"

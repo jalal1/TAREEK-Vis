@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "counts_chart_dialog.h"
 #include "ribbon/ribbon.h"
 #include <QCheckBox>

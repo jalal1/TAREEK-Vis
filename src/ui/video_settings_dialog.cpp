@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "video_settings_dialog.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>

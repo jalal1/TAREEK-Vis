@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "info_panel.h"
 #include "panel_style.h"
 #include "elided_label.h"

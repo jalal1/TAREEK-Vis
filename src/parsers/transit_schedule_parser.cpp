@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "transit_schedule_parser.h"
 #include <fstream>
 #include <sstream>

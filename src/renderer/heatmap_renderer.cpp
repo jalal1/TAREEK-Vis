@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "heatmap_renderer.h"
 
 #include "heatmap_palette.h"

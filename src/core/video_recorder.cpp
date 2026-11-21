@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "video_recorder.h"
 #include "logger.h"
 #include <QBuffer>

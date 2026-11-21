@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "tile_renderer.h"
 #include <QNetworkRequest>
 #include <QNetworkDiskCache>

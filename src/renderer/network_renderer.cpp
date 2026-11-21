@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "network_renderer.h"
 #include "link_palette.h"
 #include "core/logger.h"

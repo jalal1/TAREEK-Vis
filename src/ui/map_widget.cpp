@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "map_widget.h"
 #include "core/video_recorder.h"
 #include "core/logger.h"

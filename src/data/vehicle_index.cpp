@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "vehicle_index.h"
 #include "core/logger.h"
 #include "core/modes.h"

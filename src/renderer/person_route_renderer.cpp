@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "person_route_renderer.h"
 #include <cmath>
 

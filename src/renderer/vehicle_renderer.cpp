@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "vehicle_renderer.h"
 #include "core/transit_types.h"
 #include "core/modes.h"

@@ -74,5 +74,6 @@ these pages.
 
 ## License and warranty
 
-TAREEK-Vis is free software under the GNU General Public License v3.0. It
+TAREEK-Vis is free software under the GNU General Public License v3.0 or
+later. It
 comes without warranty. Check important results with other methods.

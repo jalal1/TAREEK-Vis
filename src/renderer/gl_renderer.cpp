@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "gl_renderer.h"
 #include "core/logger.h"
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "scenario_panel.h"
 #include "elided_label.h"
 #include "core/logger.h"

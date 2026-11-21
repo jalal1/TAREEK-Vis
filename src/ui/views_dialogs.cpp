@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "views_dialogs.h"
 #include "views_panel.h"
 #include "ribbon/ribbon.h"

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "main_window.h"
 #include "panel_style.h"
 #include "ribbon/ribbon.h"
@@ -754,7 +756,7 @@ void MainWindow::setupActions() {
             "Privacy and security.</p>"
             "<p>Copyright (c) 2026 TAREEK-Vis Contributors. Licensed under the "
             "<a href='https://www.gnu.org/licenses/gpl-3.0.html'>GNU General Public "
-            "License v3.0</a>, without warranty.</p>"
+            "License v3.0</a> or later, without warranty.</p>"
             "<p>Third-party libraries: Qt6 (LGPL v3.0), PugiXML 1.15 (MIT), "
             "ZLIB (Zlib License), FFmpeg (LGPL/GPL, optional), Lucide icons (ISC). "
             "See THIRD_PARTY_LICENSES.md for the full license texts.</p>");

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "event_parser.h"
 #include "core/logger.h"
 #include <fstream>

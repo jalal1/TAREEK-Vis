@@ -244,7 +244,8 @@ TAREEK-Vis
 
 ## License
 
-TAREEK-Vis is licensed under the [GNU General Public License v3.0](LICENSE).
+TAREEK-Vis is licensed under the [GNU General Public License v3.0 or later](LICENSE)
+(`GPL-3.0-or-later`).
 
 ### Third-Party Libraries
 

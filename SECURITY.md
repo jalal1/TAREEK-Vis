@@ -3,7 +3,9 @@
 ## Report a security problem
 
 Do not report a security problem in a public issue, pull request, or
-discussion. Contact the maintainer privately through
+discussion. Report it privately with
+[GitHub private vulnerability reporting](https://github.com/jalal1/TAREEK-Vis/security/advisories/new).
+If you cannot use GitHub, contact the maintainer through
 [jalal1.github.io](https://jalal1.github.io/).
 
 Include this data in your report:

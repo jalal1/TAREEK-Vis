@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or help
+    url: https://github.com/jalal1/TAREEK-Vis/discussions
+    about: Ask "how do I...?" questions in Discussions.
+  - name: User guide
+    url: https://github.com/jalal1/TAREEK-Vis/blob/main/help/index.md
+    about: Read the user guide before you open an issue.
+  - name: Security problem
+    url: https://github.com/jalal1/TAREEK-Vis/blob/main/SECURITY.md
+    about: Do not report security problems in public. Read this page.

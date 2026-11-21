@@ -21,19 +21,26 @@ You sign the CLA one time. It then applies to all your contributions.
 
 ## How to sign the CLA
 
-1. Fork the repository and make a new branch.
-2. Make a new file `licensing/consents/<your-github-username>.md`.
-3. Copy the signature block from the end of [CLA.md](CLA.md) into the file.
-4. Fill in all the fields. Type your full name as your signature.
-5. Commit the file from your own GitHub account. Do not add other changes in
-   this commit.
-6. Open a pull request with the title `CLA: <your-github-username>`.
+You sign with one comment on your first pull request.
 
-The maintainer merges the CLA pull request. After that, the maintainer can
-merge your other pull requests.
+1. Open your pull request as usual.
+2. Post this comment on the pull request from your own GitHub account.
+   Replace `<your full name>` with your legal name.
 
-Do not put a postal address, a telephone number, or other private data in
-the file. The repository is public, and the file stays in the history.
+   ```text
+   I have read the TAREEK-Vis CLA, version 1.0
+   (https://github.com/jalal1/TAREEK-Vis/blob/main/CLA.md), and I agree
+   to its terms for all my present and future contributions.
+   Full name: <your full name>
+   ```
+
+3. Do not edit or delete the comment after you post it.
+
+That is all. The maintainer records your signature in `licensing/consents/`.
+For your next pull requests, you do not sign again.
+
+Only the maintainer can merge a pull request. The maintainer does not merge a
+pull request from a person who did not sign.
 
 If you cannot sign in public, contact the maintainer through
 [jalal1.github.io](https://jalal1.github.io/) before you start.
@@ -44,3 +51,41 @@ If you cannot sign in public, contact the maintainer through
 - Fill in the pull request template. Tick the CLA box.
 - Make sure that the project builds. See the build steps in
   [README.md](README.md).
+- If the change shows on the screen, add screenshots to the pull request.
+  For a change to an existing feature, add a screenshot before and after the
+  change.
+- If you change a feature that users see, update the help in [help/](help/).
+
+## Where code comes from
+
+Send only code that you wrote yourself.
+
+- Do not copy code from other projects, and do not ask an AI tool to
+  translate code from other projects. A translation is also a copy.
+- You can use an algorithm from a paper, a standard, or a specification.
+  Give the source in a code comment or in the pull request.
+- If you looked at the code of another project while you wrote yours, name
+  that project in the pull request.
+- If you must include code from another source, follow section 7 of the
+  [CLA](CLA.md). Send it separately, and give its source and its license.
+
+## AI-assisted contributions
+
+You can use AI tools to write your contribution. We judge a contribution by
+its quality, not by the tool that wrote it.
+
+The person who opens a pull request is responsible for it:
+
+- You read the change, and you can explain what it does and why.
+- You built the change and looked at the result yourself. Do not trust only
+  the summary of a tool.
+- The description and your replies in the review are true for the change.
+
+## Report a problem or ask a question
+
+- Bugs and feature requests:
+  [open an issue](https://github.com/jalal1/TAREEK-Vis/issues/new/choose).
+- Questions: use
+  [Discussions](https://github.com/jalal1/TAREEK-Vis/discussions).
+- Security problems: see [SECURITY.md](SECURITY.md). Do not open a public
+  issue.

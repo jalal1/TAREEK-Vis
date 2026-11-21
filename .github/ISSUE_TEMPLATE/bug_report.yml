@@ -1,0 +1,65 @@
+name: Bug report
+description: Tell us about a problem in TAREEK-Vis.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Fill in the fields below, so that we can find the problem.
+        Do not report a security problem here. See [SECURITY.md](https://github.com/jalal1/TAREEK-Vis/blob/main/SECURITY.md).
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you start
+      options:
+        - label: I searched the [existing issues](https://github.com/jalal1/TAREEK-Vis/issues), and this problem is not there.
+          required: true
+        - label: I read [Troubleshooting](https://github.com/jalal1/TAREEK-Vis/blob/main/help/troubleshooting.md).
+          required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What occurred?
+      placeholder: When I do X, Y occurs. I expected Z.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to get the problem again
+      placeholder: |
+        1. Open the run '...'
+        2. Click '...' on the ribbon
+        3. See the error
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: TAREEK-Vis version
+      description: See **Help > About**. If you built from source, give the commit (`git rev-parse --short HEAD`).
+      placeholder: 1.5.0
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Windows version and graphics card
+      placeholder: Windows 11, NVIDIA RTX 3060
+    validations:
+      required: false
+  - type: textarea
+    id: run
+    attributes:
+      label: The run
+      description: How large is the run (number of links, number of agents, size of the events file)? Which MATSim version made it? If you can share a small run that shows the problem, give a link.
+    validations:
+      required: false
+  - type: textarea
+    id: log
+    attributes:
+      label: Log and screenshots
+      description: Attach `simvis.log`. It is in the `.simvis_cache` folder of the run, or in your `%TEMP%` folder before a run opens. The log contains the full paths of your files. Read it before you attach it.
+    validations:
+      required: false

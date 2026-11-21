@@ -101,6 +101,14 @@ Contributions are welcome and encouraged: open an
 you change a feature that users see, also update the help (see
 [Update the help](#update-the-help-maintainers)).
 
+**Before we can merge your first pull request, you must sign the
+[Contributor License Agreement](CLA.md).** To sign, you post one comment on
+your pull request. You sign only one time. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the steps.
+
+To report a security problem, do not open a public issue. See
+[SECURITY.md](SECURITY.md).
+
 ## Download & Install (Windows, no build required)
 
 1. Download `TAREEK-Vis-Setup-x.y.z.exe` from the
@@ -242,10 +250,22 @@ TAREEK-Vis
 - LRU cache for event chunks (configurable max memory)
 - Binary file caching for fast subsequent loads
 
+## Disclaimer
+
+Most of the TAREEK-Vis code is written with Claude, an AI model by Anthropic.
+A human directs and reviews all of the work, and we test the results.
+TAREEK-Vis is a research tool. Before you use its results for planning or
+other decisions, check them with other methods. If a result looks wrong,
+[open an issue](https://github.com/jalal1/TAREEK-Vis/issues/new/choose).
+
 ## License
 
 TAREEK-Vis is licensed under the [GNU General Public License v3.0 or later](LICENSE)
 (`GPL-3.0-or-later`).
+
+Contributions come in under the [Contributor License Agreement](CLA.md).
+The signed agreements and relicensing permissions are in
+[licensing/](licensing/).
 
 ### Third-Party Libraries
 

@@ -129,18 +129,13 @@ all right, title, and interest in and to Your Contributions.
 
 ## Signature
 
-To sign, copy the block below into a new file as described in
-[CONTRIBUTING.md](CONTRIBUTING.md), fill in every field, and submit it.
+To sign, post the comment below on your pull request from your own GitHub
+account, as described in [CONTRIBUTING.md](CONTRIBUTING.md). Your GitHub
+account and the date of the comment identify you and the date of signature.
 
 ```text
-I have read the TAREEK-Vis Individual Contributor License Agreement,
-CLA version 1.0, and I agree to its terms for all my present and future
-Contributions.
-
-Full name:        ____________________________________
-GitHub username:  ____________________________________
-Country:          ____________________________________
-Date (YYYY-MM-DD): ___________________________________
-
-Signature (type your full name): _____________________
+I have read the TAREEK-Vis CLA, version 1.0
+(https://github.com/jalal1/TAREEK-Vis/blob/main/CLA.md), and I agree
+to its terms for all my present and future contributions.
+Full name: <your full name>
 ```
